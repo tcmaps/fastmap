@@ -42,11 +42,12 @@ from pgoapi import utilities as util
 from google.protobuf.internal import encoder
 from geopy.geocoders import GoogleV3
 from s2sphere import Cell, CellId, LatLng
-import s2sphere
 
 log = logging.getLogger(__name__)
 
 import utils
+
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 def init_config():
     parser = argparse.ArgumentParser()
@@ -63,8 +64,9 @@ def init_config():
     parser.add_argument("-a", "--auth_service", help="Auth Service ('ptc' or 'google')", default="ptc")
     parser.add_argument("-u", "--username", help="Username")
     parser.add_argument("-p", "--password", help="Password")
-    parser.add_argument("-r", "--cells", help="Cells to walk", default=20)
-    parser.add_argument("-t", "--delay", help="get_map_objects refresh interval", default=10)
+    parser.add_argument("-l", "--location", help="Location")
+    parser.add_argument("-r", "--offset", help="rectangle size", default=1000)
+    parser.add_argument("-t", "--delay", help="rpc request interval", default=10)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)
     config = parser.parse_args()
 
@@ -76,6 +78,8 @@ def init_config():
     if config.auth_service not in ['ptc', 'google']:
       log.error("Invalid Auth service specified! ('ptc' or 'google')")
       return None
+  
+    if not utils.check_db(): utils.init_db(config.location, config.offset, 13);
 
     return config
 
@@ -101,38 +105,36 @@ def main():
         
     api = PGoApi()
     api.set_position(0,0,0)
-    RPC_DELAY = config.delay
- 
-    while not api.login(config.auth_service, config.username, config.password):
-        log.warning('Login failed! retrying in 3sec...')
-        time.sleep(3)
- 
-    api.get_player()
-    response_dict = api.call()
+  
+    api.set_authentication(provider = config.auth_service, username = config.username, password =  config.password)
+    api.activate_signature(utils.set_lib())    
     log.info ('API online! Scan starts in 5sec...')
     time.sleep(5)
     
     db = sqlite3.connect('db.sqlite')
     db_cur = db.cursor()
-    
+    db_cur.execute("SELECT cell_id FROM 'cells' WHERE quick_scan=0 ORDER BY cell_id")
+        #db_cur.execute("SELECT COUNT(cell_id) FROM cells")
     _tstats = [0, 0, 0, 0]
     
-    run=1
-    while run:
+    scan_queque = [x[0] for x in db_cur.fetchall()]
+    # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns
+    if scan_queque == None: return
         
-        db_cur.execute("SELECT cell_id FROM 'cells' WHERE quick_scan=0 ORDER BY cell_id LIMIT 0,{}".format(config.cells))
-        # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns
-        cell_ids = [x[0] for x in db_cur.fetchall()]
-        
-        if not len(cell_ids): break
-        
-        _tstats[0] += len(cell_ids)
+    for queq in scan_queque:    
+                
+        cell_ids = []
+        _tstats[0] += 1
         _cstats = [0, 0, 0]
         
-        log.info('Scanning {} cells from {} to {}'.format(len(cell_ids),cell_ids[0],cell_ids[len(cell_ids)-1]))
+        log.info('Scan {} of {}...'.format(_tstats[0],(len(scan_queque))))
         
-        _ll = CellId.to_lat_lng(CellId(cell_ids[int(len(cell_ids)/2)]))
+        cell = CellId(queq)
+        _ll = CellId.to_lat_lng(cell)
         lat, lng, alt = _ll.lat().degrees, _ll.lng().degrees, 0
+        
+        cell_ids = utils.cell_childs_2(cell)
+        
         timestamps = [0,] * len(cell_ids)
         response_dict = []
         
@@ -142,48 +144,60 @@ def main():
             
             try:
                 api.set_position(lat, lng, alt)
-                api.get_map_objects(latitude = util.f2i(lat), longitude = util.f2i(lng), since_timestamp_ms = timestamps, cell_id = cell_ids)
-                response_dict = api.call()
+                response_dict = api.get_map_objects(latitude=lat, longitude=lng, since_timestamp_ms = timestamps, cell_id = cell_ids)
                 if 'status' in response_dict['responses']['GET_MAP_OBJECTS']:
                     if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 1:
                         _try=0
             except:
-                 print(sys.exc_info()[0])
-                 time.sleep(10)
-                 _try=1
+                log.error(sys.exc_info()[0])
+                time.sleep(10)
+                _try=1
                 
         for _map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:                        
             _content = 0
+
             if 'forts' in _map_cell:
-                _content=2
                 for _frt in _map_cell['forts']:
                     if 'gym_points' in _frt:
                         _cstats[0]+=1
-                        _type, _content = 0 , 6
+                        _type = 0
+                        utils.set_bit(_content, 3)
                         db_cur.execute("REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type) "
                         "VALUES ('{}',{},{},{},{},{})".format(_frt['id'],_map_cell['s2_cell_id'],_frt['latitude'],_frt['longitude'], \
                         int(_frt['enabled']),0))
                     else:
                         _type = 1; _cstats[1]+=1
+                        utils.set_bit(_content, 2)
                         db_cur.execute("REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type) "
                         "VALUES ('{}',{},{},{},{},{})".format(_frt['id'],_map_cell['s2_cell_id'],_frt['latitude'],_frt['longitude'], \
                         int(_frt['enabled']),1))
                                                              
             if 'spawn_points' in _map_cell:
-                _content+=1
+                utils.set_bit(_content, 1)
                 for _spwn in _map_cell['spawn_points']:
                     _cstats[2]+=1;
                     db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
                     "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
+            if 'decimated_spawn_points' in _map_cell:
+                for _spwn in _map_cell['decimated_spawn_points']:
+                    utils.set_bit(_content, 1)
+                    _cstats[2]+=1;
+                    db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
+                    "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
+            if 'wild_pokemons' in _map_cell:
+                for _spwn in _map_cell['wild_pokemons']:
+                    utils.set_bit(_content, 1)
+                    _cstats[2]+=1;
+                    db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
+                    "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
             
-            db_cur.execute("UPDATE cells SET quick_scan=1, content={} WHERE cell_id={}".format(_content,_map_cell['s2_cell_id']))
+            db_cur.execute("UPDATE cells SET quick_scan=1, content={} WHERE cell_id={}".format(_content,cell.id()))
             
         db.commit()
         
         _tstats[1] += _cstats[0]; _tstats[2] += _cstats[1]; _tstats[3] += _cstats[2]
-        log.info("UPSERTed {} Gyms, {} Pokestops, {} Spawns".format(*_cstats))
-        log.info ('Sleeping... ({}sec)'.format(RPC_DELAY))
-        time.sleep(RPC_DELAY)
+        log.info("UPSERTed {} Gyms, {} Pokestops, {} Spawns. Sleeping...".format(*_cstats))
+        time.sleep(int(config.delay))
             
     log.info('Scanned {} cells; got {} Gyms, {} Pokestops, {} Spawns'.format(*_tstats))
 
