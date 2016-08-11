@@ -26,22 +26,16 @@ Author: tjado <https://github.com/tejado>
 """
 
 import os
-import re
 import sys
 import json
 import time
-import struct
 import sqlite3
 import logging
-import requests
+#import requests
 import argparse
 
 from pgoapi import PGoApi
-from pgoapi.utilities import f2i, h2f
-from pgoapi import utilities as util
-from google.protobuf.internal import encoder
-from geopy.geocoders import GoogleV3
-from s2sphere import Cell, CellId, LatLng
+from s2sphere import CellId
 
 log = logging.getLogger(__name__)
 
@@ -60,14 +54,14 @@ def init_config():
             load.update(json.load(data))
 
     # Read passed in Arguments
-    required = lambda x: not x in load
     parser.add_argument("-a", "--auth_service", help="Auth Service ('ptc' or 'google')", default="ptc")
     parser.add_argument("-u", "--username", help="Username")
     parser.add_argument("-p", "--password", help="Password")
     parser.add_argument("-l", "--location", help="Location")
-    parser.add_argument("-r", "--offset", help="rectangle size", default=1000)
-    parser.add_argument("-t", "--delay", help="rpc request interval", default=10)
-    parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)
+    parser.add_argument("-r", "--offset", help="rectangle size", default=1000, type=int)
+    parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
+    parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
+    parser.add_argument("-f", "--fill", help="initialize db / add cells", action='store_true')
     config = parser.parse_args()
 
     # Passed in arguments shoud trump
@@ -76,10 +70,13 @@ def init_config():
             config.__dict__[key] = load[key]
 
     if config.auth_service not in ['ptc', 'google']:
-      log.error("Invalid Auth service specified! ('ptc' or 'google')")
-      return None
+        log.error("Invalid Auth service specified! ('ptc' or 'google')")
+        return None
   
-    if not utils.check_db(): utils.init_db(config.location, config.offset, 13);
+    utils.check_db()
+    
+    if config.fill:
+        utils.init_db(config.location, int(config.offset), 13);
 
     return config
 
@@ -114,16 +111,16 @@ def main():
     db = sqlite3.connect('db.sqlite')
     db_cur = db.cursor()
     db_cur.execute("SELECT cell_id FROM 'cells' WHERE quick_scan=0 ORDER BY cell_id")
-        #db_cur.execute("SELECT COUNT(cell_id) FROM cells")
     _tstats = [0, 0, 0, 0]
     
     scan_queque = [x[0] for x in db_cur.fetchall()]
     # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns
-    if scan_queque == None: return
+    if scan_queque is None: return
         
     for queq in scan_queque:    
                 
         cell_ids = []
+        _content = 0
         _tstats[0] += 1
         _cstats = [0, 0, 0]
         
@@ -154,51 +151,48 @@ def main():
                 _try=1
                 
         for _map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:                        
-            _content = 0
 
             if 'forts' in _map_cell:
                 for _frt in _map_cell['forts']:
                     if 'gym_points' in _frt:
                         _cstats[0]+=1
                         _type = 0
-                        utils.set_bit(_content, 3)
+                        _content = utils.set_bit(_content, 2)
                         db_cur.execute("REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type) "
                         "VALUES ('{}',{},{},{},{},{})".format(_frt['id'],_map_cell['s2_cell_id'],_frt['latitude'],_frt['longitude'], \
                         int(_frt['enabled']),0))
                     else:
                         _type = 1; _cstats[1]+=1
-                        utils.set_bit(_content, 2)
+                        _content = utils.set_bit(_content, 1)
                         db_cur.execute("REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type) "
                         "VALUES ('{}',{},{},{},{},{})".format(_frt['id'],_map_cell['s2_cell_id'],_frt['latitude'],_frt['longitude'], \
                         int(_frt['enabled']),1))
                                                              
             if 'spawn_points' in _map_cell:
-                utils.set_bit(_content, 1)
+                _content = utils.set_bit(_content, 0)
                 for _spwn in _map_cell['spawn_points']:
                     _cstats[2]+=1;
                     db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
                     "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
             if 'decimated_spawn_points' in _map_cell:
+                _content = utils.set_bit(_content, 0)
                 for _spwn in _map_cell['decimated_spawn_points']:
-                    utils.set_bit(_content, 1)
                     _cstats[2]+=1;
                     db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
                     "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
             if 'wild_pokemons' in _map_cell:
+                _content = utils.set_bit(_content, 0)
                 for _spwn in _map_cell['wild_pokemons']:
-                    utils.set_bit(_content, 1)
                     _cstats[2]+=1;
                     db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
                     "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
-            
-            db_cur.execute("UPDATE cells SET quick_scan=1, content={} WHERE cell_id={}".format(_content,cell.id()))
-            
-        db.commit()
         
         _tstats[1] += _cstats[0]; _tstats[2] += _cstats[1]; _tstats[3] += _cstats[2]
         log.info("UPSERTed {} Gyms, {} Pokestops, {} Spawns. Sleeping...".format(*_cstats))
         time.sleep(int(config.delay))
-            
+        db_cur.execute("UPDATE cells SET quick_scan=1, content={} WHERE cell_id={}".format(_content,cell.id()))
+        db.commit()
+
     log.info('Scanned {} cells; got {} Gyms, {} Pokestops, {} Spawns'.format(*_tstats))
 
 if __name__ == '__main__':

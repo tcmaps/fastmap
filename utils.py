@@ -6,6 +6,8 @@ import s2sphere
 
 from geopy.geocoders import GoogleV3
 from geographiclib.geodesic import Geodesic
+from s2sphere import Cell, CellId, LatLng
+
 
 def set_lib():
     if os.name =='nt':
@@ -25,15 +27,14 @@ def check_db():
 
 def init_db(location, offset, level):
     
-    geod = Geodesic.WGS84
     lat, lng, alt = get_pos_by_name(location)
     db = sqlite3.connect('db.sqlite')
     
     r = s2sphere.RegionCoverer()
     r.min_level, r.min_level = level, level
-    g1 = geod.Direct(lat, lng, (360-45), offset)
+    g1 = Geodesic.WGS84.Direct(lat, lng, (360-45), offset)
     p1 = s2sphere.LatLng.from_degrees(g1['lat2'],g1['lon2'])
-    g2 = geod.Direct(lat, lng, (180-45), offset)
+    g2 = Geodesic.WGS84.Direct(lat, lng, (180-45), offset)
     p2 = s2sphere.LatLng.from_degrees(g2['lat2'],g2['lon2'])
     cell_ids = r.get_covering(s2sphere.LatLngRect.from_point_pair(p1, p2))
     #print(cell_ids)
@@ -54,11 +55,6 @@ def get_pos_by_name(location_name):
 
 def set_bit(value, bit):
     return value | (1<<bit)
-
-def encode(cellid):
-    output = []
-    encoder._VarintEncoder()(output.append, cellid)
-    return ''.join(output)
 
 def cell_childs_2(cell_san):
     cells = []
