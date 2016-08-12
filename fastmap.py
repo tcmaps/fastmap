@@ -35,7 +35,7 @@ import logging
 import argparse
 
 from pgoapi import PGoApi
-from s2sphere import CellId
+from s2sphere import CellId, LatLng
 
 log = logging.getLogger(__name__)
 
@@ -172,8 +172,9 @@ def main():
                 _content = utils.set_bit(_content, 0)
                 for _spwn in _map_cell['spawn_points']:
                     _cstats[2]+=1;
-                    db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
-                    "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
+                    spwn_id = CellId.from_lat_lng(LatLng.from_degrees(_spwn['latitude'],_spwn['longitude'])).parent(20).to_token()
+                    db_cur.execute("REPLACE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng) "
+                    "VALUES ('{}',{},{},{})".format(spwn_id,_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
             if 'decimated_spawn_points' in _map_cell:
                 _content = utils.set_bit(_content, 0)
                 for _spwn in _map_cell['decimated_spawn_points']:
@@ -184,14 +185,13 @@ def main():
                 _content = utils.set_bit(_content, 0)
                 for _spwn in _map_cell['wild_pokemons']:
                     _cstats[2]+=1;
-                    db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
-                    "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
+                    db_cur.execute("REPLACE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng) "
+                    "VALUES ('{}',{},{},{})".format(_spwn['spawn_point_id'],_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
         
         _tstats[1] += _cstats[0]; _tstats[2] += _cstats[1]; _tstats[3] += _cstats[2]
+        db_cur.execute("UPDATE cells SET quick_scan=1, content={} WHERE cell_id={}".format(_content,cell.id())); db.commit()
         log.info("UPSERTed {} Gyms, {} Pokestops, {} Spawns. Sleeping...".format(*_cstats))
         time.sleep(int(config.delay))
-        db_cur.execute("UPDATE cells SET quick_scan=1, content={} WHERE cell_id={}".format(_content,cell.id()))
-        db.commit()
 
     log.info('Scanned {} cells; got {} Gyms, {} Pokestops, {} Spawns'.format(*_tstats))
 
