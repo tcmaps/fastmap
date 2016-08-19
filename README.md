@@ -5,4 +5,4 @@
   
 #USAGE
 put credentials in config.json!  
-first run: add -l parameter with Location and -r for scan area size in meters  
+**first run: add -f parameter**, specify Location with -l and scan area size in meters with -r
