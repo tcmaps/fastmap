@@ -41,7 +41,7 @@ def init_db(location, offset, level):
     cells=0    
     for cell in cell_ids:
         if cell.level() == level:
-            db.cursor().execute("REPLACE INTO cells (cell_id) VALUES ({})".format(cell.id()))
+            db.cursor().execute("REPLACE INTO queque (cell_id) VALUES ({})".format(cell.id()))
             cells+=1
     db.commit()
 

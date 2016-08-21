@@ -31,7 +31,6 @@ import json
 import time
 import sqlite3
 import logging
-#import requests
 import argparse
 
 from pgoapi import PGoApi
@@ -63,7 +62,11 @@ def init_config():
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
     parser.add_argument("-f", "--fill", help="initialize db / add cells", action='store_true')
     config = parser.parse_args()
-
+    utils.check_db()
+    
+    if config.location:
+        utils.init_db(config.location, int(config.offset), 13);
+    
     # Passed in arguments shoud trump
     for key in config.__dict__:
         if key in load and config.__dict__[key] == None:
@@ -73,11 +76,6 @@ def init_config():
         log.error("Invalid Auth service specified! ('ptc' or 'google')")
         return None
   
-    utils.check_db()
-    
-    if config.fill:
-        utils.init_db(config.location, int(config.offset), 13);
-
     return config
 
 def main():
@@ -110,7 +108,7 @@ def main():
     
     db = sqlite3.connect('db.sqlite')
     db_cur = db.cursor()
-    db_cur.execute("SELECT cell_id FROM 'cells' WHERE quick_scan=0 ORDER BY cell_id")
+    db_cur.execute("SELECT cell_id FROM 'queque' ORDER BY cell_id")
     _tstats = [0, 0, 0, 0]
     
     scan_queque = [x[0] for x in db_cur.fetchall()]
@@ -179,17 +177,21 @@ def main():
                 _content = utils.set_bit(_content, 0)
                 for _spwn in _map_cell['decimated_spawn_points']:
                     _cstats[2]+=1;
+                    spwn_id = CellId.from_lat_lng(LatLng.from_degrees(_spwn['latitude'],_spwn['longitude'])).parent(20).to_token()
                     db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
                     "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
             if 'wild_pokemons' in _map_cell:
                 _content = utils.set_bit(_content, 0)
-                for _spwn in _map_cell['wild_pokemons']:
-                    _cstats[2]+=1;
-                    db_cur.execute("REPLACE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng) "
-                    "VALUES ('{}',{},{},{})".format(_spwn['spawn_point_id'],_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
-        
+                #for _spwn in _map_cell['wild_pokemons']:
+                    #_cstats[2]+=1;
+                    #db_cur.execute("REPLACE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng) "
+                    #"VALUES ('{}',{},{},{})".format(_spwn['spawn_point_id'],_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
+					
+            db_cur.execute("REPLACE INTO cells (cell_id, content, quick_scan) VALUES ({}, {}, {})".format(_map_cell['s2_cell_id'],_content,1))
+			
         _tstats[1] += _cstats[0]; _tstats[2] += _cstats[1]; _tstats[3] += _cstats[2]
-        db_cur.execute("UPDATE cells SET quick_scan=1, content={} WHERE cell_id={}".format(_content,cell.id())); db.commit()
+        db_cur.execute("DELETE FROM queque WHERE cell_id={}".format(cell.id()))
+        db.commit()
         log.info("UPSERTed {} Gyms, {} Pokestops, {} Spawns. Sleeping...".format(*_cstats))
         time.sleep(int(config.delay))
 
