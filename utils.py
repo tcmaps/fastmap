@@ -37,13 +37,15 @@ def init_db(location, offset, level):
     g2 = Geodesic.WGS84.Direct(lat, lng, (180-45), offset)
     p2 = s2sphere.LatLng.from_degrees(g2['lat2'],g2['lon2'])
     cell_ids = r.get_covering(s2sphere.LatLngRect.from_point_pair(p1, p2))
-    #print(cell_ids)
+
     cells=0    
     for cell in cell_ids:
         if cell.level() == level:
             db.cursor().execute("REPLACE INTO queque (cell_id) VALUES ({})".format(cell.id()))
             cells+=1
     db.commit()
+    
+    return len(cells)
 
 def get_pos_by_name(location_name):
     geolocator = GoogleV3()
