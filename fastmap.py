@@ -60,11 +60,12 @@ def init_config():
     parser.add_argument("-r", "--offset", help="rectangle size", default=1000, type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
+    parser.add_argument("-f", "--fill", help="initialize db / add cells", action='store_true')
     config = parser.parse_args()
     utils.check_db()
     
     if config.location:
-        utils.init_db(config.location, int(config.offset), 13);
+        log.info('Added %d cells to scan queue.' % utils.init_db(config.location, int(config.offset), 13))
     
     # Passed in arguments shoud trump
     for key in config.__dict__:
@@ -114,7 +115,7 @@ def main():
     # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns
     
     if len(scan_queque) == 0: log.info('Nothing to scan!'); return
-        
+            
     for queq in scan_queque:    
                 
         cell_ids = []
@@ -122,7 +123,7 @@ def main():
         _tstats[0] += 1
         _cstats = [0, 0, 0]
         
-        log.info('Scan {} of {}...'.format(_tstats[0],(len(scan_queque))))
+        log.info('Scan {} of {}.'.format(_tstats[0],(len(scan_queque))))
         
         cell = CellId(queq)
         _ll = CellId.to_lat_lng(cell)
@@ -195,7 +196,7 @@ def main():
         log.info("UPSERTed {} Gyms, {} Pokestops, {} Spawns. Sleeping...".format(*_cstats))
         time.sleep(int(config.delay))
 
-    log.info('Scanned {} cells; got {} Gyms, {} Pokestops, {} Spawns'.format(*_tstats))
+    log.info('Scanned {} cells; got {} Gyms, {} Pokestops, {} Spawns.'.format(*_tstats))
 
 if __name__ == '__main__':
     main()
