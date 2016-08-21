@@ -113,9 +113,7 @@ def main():
     scan_queque = [x[0] for x in db_cur.fetchall()]
     # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns
     
-    if len(scan_queque) == 0:
-    	log.info('Nothing to scan!')
-    return
+    if len(scan_queque) == 0: log.info('Nothing to scan!'); return
         
     for queq in scan_queque:    
                 
