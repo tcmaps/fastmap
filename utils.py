@@ -45,7 +45,7 @@ def init_db(location, offset, level):
             cells+=1
     db.commit()
     
-    return len(cells)
+    return cells
 
 def get_pos_by_name(location_name):
     geolocator = GoogleV3()
