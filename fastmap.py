@@ -60,7 +60,6 @@ def init_config():
     parser.add_argument("-r", "--offset", help="rectangle size", default=1000, type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
-    parser.add_argument("-f", "--fill", help="initialize db / add cells", action='store_true')
     config = parser.parse_args()
     utils.check_db()
     
