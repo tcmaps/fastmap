@@ -6,7 +6,8 @@ import s2sphere
 
 from geopy.geocoders import GoogleV3
 from geographiclib.geodesic import Geodesic
-from s2sphere import Cell, CellId, LatLng
+from s2sphere import Cell, CellId, LatLng, RegionCoverer, LatLngRect
+
 
 
 def set_lib():
@@ -30,18 +31,19 @@ def init_db(location, offset, level):
     lat, lng, alt = get_pos_by_name(location)
     db = sqlite3.connect('db.sqlite')
     
-    r = s2sphere.RegionCoverer()
+    g = Geodesic.WGS84
+    r = RegionCoverer()
     r.min_level, r.min_level = level, level
-    g1 = Geodesic.WGS84.Direct(lat, lng, (360-45), offset)
-    p1 = s2sphere.LatLng.from_degrees(g1['lat2'],g1['lon2'])
-    g2 = Geodesic.WGS84.Direct(lat, lng, (180-45), offset)
-    p2 = s2sphere.LatLng.from_degrees(g2['lat2'],g2['lon2'])
-    cell_ids = r.get_covering(s2sphere.LatLngRect.from_point_pair(p1, p2))
+    g1 = g.Direct(lat, lng, (360-45), offset)
+    p1 = LatLng.from_degrees(g1['lat2'],g1['lon2'])
+    g2 = g.Direct(lat, lng, (180-45), offset)
+    p2 = LatLng.from_degrees(g2['lat2'],g2['lon2'])
+    cell_ids = r.get_covering(LatLngRect.from_point_pair(p1, p2))
 
     cells=0    
     for cell in cell_ids:
         if cell.level() == level:
-            db.cursor().execute("REPLACE INTO queque (cell_id) VALUES ({})".format(cell.id()))
+            db.cursor().execute("INSERT OR IGNORE INTO queque (cell_id) VALUES ('%s')" % cell.to_token())
             cells+=1
     db.commit()
     

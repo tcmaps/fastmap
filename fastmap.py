@@ -114,7 +114,9 @@ def main():
     scan_queque = [x[0] for x in db_cur.fetchall()]
     # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns
     
-    if len(scan_queque) == 0: log.info('Nothing to scan!'); return
+    if len(scan_queque) == 0:
+    	log.info('Nothing to scan!')
+        return
             
     for queq in scan_queque:    
                 
@@ -125,7 +127,7 @@ def main():
         
         log.info('Scan {} of {}.'.format(_tstats[0],(len(scan_queque))))
         
-        cell = CellId(queq)
+        cell = CellId.from_token(queq)
         _ll = CellId.to_lat_lng(cell)
         lat, lng, alt = _ll.lat().degrees, _ll.lng().degrees, 0
         
@@ -149,7 +151,8 @@ def main():
                 time.sleep(10)
                 _try=1
                 
-        for _map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:                        
+        for _map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
+            _cell = CellId(int(_map_cell['s2_cell_id'])).to_token()                        
 
             if 'forts' in _map_cell:
                 for _frt in _map_cell['forts']:
@@ -158,13 +161,13 @@ def main():
                         _type = 0
                         _content = utils.set_bit(_content, 2)
                         db_cur.execute("REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type) "
-                        "VALUES ('{}',{},{},{},{},{})".format(_frt['id'],_map_cell['s2_cell_id'],_frt['latitude'],_frt['longitude'], \
+                        "VALUES ('{}','{}',{},{},{},{})".format(_frt['id'],_cell,_frt['latitude'],_frt['longitude'], \
                         int(_frt['enabled']),0))
                     else:
                         _type = 1; _cstats[1]+=1
                         _content = utils.set_bit(_content, 1)
                         db_cur.execute("REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type) "
-                        "VALUES ('{}',{},{},{},{},{})".format(_frt['id'],_map_cell['s2_cell_id'],_frt['latitude'],_frt['longitude'], \
+                        "VALUES ('{}','{}',{},{},{},{})".format(_frt['id'],_cell,_frt['latitude'],_frt['longitude'], \
                         int(_frt['enabled']),1))
                                                              
             if 'spawn_points' in _map_cell:
@@ -173,25 +176,25 @@ def main():
                     _cstats[2]+=1;
                     spwn_id = CellId.from_lat_lng(LatLng.from_degrees(_spwn['latitude'],_spwn['longitude'])).parent(20).to_token()
                     db_cur.execute("REPLACE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng) "
-                    "VALUES ('{}',{},{},{})".format(spwn_id,_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
+                    "VALUES ('{}','{}',{},{})".format(spwn_id,_cell,_spwn['latitude'],_spwn['longitude']))
             if 'decimated_spawn_points' in _map_cell:
                 _content = utils.set_bit(_content, 0)
                 for _spwn in _map_cell['decimated_spawn_points']:
                     _cstats[2]+=1;
                     spwn_id = CellId.from_lat_lng(LatLng.from_degrees(_spwn['latitude'],_spwn['longitude'])).parent(20).to_token()
                     db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
-                    "VALUES ({},{},{})".format(_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
+                    "VALUES ('{}','{}',{},{})".format(spwn_id,_cell,_spwn['latitude'],_spwn['longitude']))
             if 'wild_pokemons' in _map_cell:
                 _content = utils.set_bit(_content, 0)
                 #for _spwn in _map_cell['wild_pokemons']:
                     #_cstats[2]+=1;
                     #db_cur.execute("REPLACE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng) "
-                    #"VALUES ('{}',{},{},{})".format(_spwn['spawn_point_id'],_map_cell['s2_cell_id'],_spwn['latitude'],_spwn['longitude']))
-					
-            db_cur.execute("REPLACE INTO cells (cell_id, content, quick_scan) VALUES ({}, {}, {})".format(_map_cell['s2_cell_id'],_content,1))
-			
+                    #"VALUES ('{}','{}',{},{})".format(_spwn['spawn_point_id'],_cell,_spwn['latitude'],_spwn['longitude']))
+                    
+            db_cur.execute("INSERT OR REPLACE INTO cells (cell_id, content) VALUES ('{}', {})".format(_cell,_content))
+            
         _tstats[1] += _cstats[0]; _tstats[2] += _cstats[1]; _tstats[3] += _cstats[2]
-        db_cur.execute("DELETE FROM queque WHERE cell_id={}".format(cell.id()))
+        db_cur.execute("DELETE FROM queque WHERE cell_id='{}'".format(cell.to_token()))
         db.commit()
         log.info("UPSERTed {} Gyms, {} Pokestops, {} Spawns. Sleeping...".format(*_cstats))
         time.sleep(int(config.delay))
