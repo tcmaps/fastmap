@@ -6,3 +6,4 @@ gpsoauth==0.3.0
 geographiclib
 six
 xxhash
+sqlite3
