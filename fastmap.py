@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+VERSION = '2.1'
+
 """
 based on: pgoapi - Pokemon Go API
 Copyright (c) 2016 tjado <https://github.com/tejado>
@@ -27,47 +29,46 @@ Author: tjado <https://github.com/tejado>
 
 import os
 import sys
-import json
 import time
+import json
+import argparse
 import sqlite3
 import logging
-import argparse
 
 from pgoapi import PGoApi
 from s2sphere import CellId, LatLng
+from utils import get_cell_ids, api_login, get_response, susub_cells
+from utils import check_db, init_db, set_bit, cover_circle, cover_square
 
 log = logging.getLogger(__name__)
-
-import utils
-
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 def init_config():
-    parser = argparse.ArgumentParser()
-    config_file = "config.json"
+    parser = argparse.ArgumentParser()     
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(module)10s] [%(levelname)5s] %(message)s')
 
-    # If config file exists, load variables from json
+    dbversion = check_db()    
+    if dbversion != VERSION:
+        log.error('Database version mismatch! Expected {}, got {}...'.format(VERSION,dbversion))
+        return
+
     load   = {}
+    config_file = "config.json"
     if os.path.isfile(config_file):
         with open(config_file) as data:
             load.update(json.load(data))
 
-    # Read passed in Arguments
     parser.add_argument("-a", "--auth_service", help="Auth Service ('ptc' or 'google')", default="ptc")
     parser.add_argument("-u", "--username", help="Username")
     parser.add_argument("-p", "--password", help="Password")
     parser.add_argument("-l", "--location", help="Location")
-    parser.add_argument("-r", "--offset", help="rectangle size", default=1000, type=int)
+    parser.add_argument("-r", "--radius", help="area circle radius", type=int)
+    parser.add_argument("-w", "--width", help="area square width", type=int)
+    parser.add_argument("--level", help="cell level used for tiling", default=13, type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
-    parser.add_argument("-f", "--fill", help="initialize db / add cells", action='store_true')
     config = parser.parse_args()
-    utils.check_db()
-    
-    if config.location:
-        log.info('Added %d cells to scan queue.' % utils.init_db(config.location, int(config.offset), 13))
-    
-    # Passed in arguments shoud trump
+
     for key in config.__dict__:
         if key in load and config.__dict__[key] == None:
             config.__dict__[key] = load[key]
@@ -75,50 +76,52 @@ def init_config():
     if config.auth_service not in ['ptc', 'google']:
         log.error("Invalid Auth service specified! ('ptc' or 'google')")
         return None
-  
-    return config
-
-def main():
-    # log settings
-    # log format
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(module)10s] [%(levelname)5s] %(message)s')
-    # log level for http request class
-    logging.getLogger("requests").setLevel(logging.WARNING)
-    # log level for main pgoapi class
-    logging.getLogger("pgoapi").setLevel(logging.WARNING)
-    # log level for internal pgoapi class
-    logging.getLogger("rpc_api").setLevel(logging.WARNING)
-
-    config = init_config()
-    if not config:
-        return
 
     if config.debug:
         logging.getLogger("requests").setLevel(logging.DEBUG)
         logging.getLogger("pgoapi").setLevel(logging.DEBUG)
         logging.getLogger("rpc_api").setLevel(logging.DEBUG)
+    else:
+        logging.getLogger("requests").setLevel(logging.WARNING)
+        logging.getLogger("pgoapi").setLevel(logging.WARNING)
+        logging.getLogger("rpc_api").setLevel(logging.WARNING)
         
-    api = PGoApi()
-    api.set_position(0,0,0)
-  
-    api.set_authentication(provider = config.auth_service, username = config.username, password =  config.password)
-    api.activate_signature(utils.set_lib())    
-    log.info ('API online! Scan starts in 5sec...')
-    time.sleep(5)
+    if config.location:
+        from utils import get_pos_by_name
+        lat, lng, alt = get_pos_by_name(config.location); del alt
+        if config.radius:
+            cells = cover_circle(lat, lng, config.radius, config.level)
+        elif config.width:
+            cells = cover_square(lat, lng, config.width, config.level)
+        else: log.error('Area size not given!'); return
+        db = sqlite3.connect('db.sqlite')
+        log.info('Added %d cells to scan queue.' % init_db(cells, db))
+        del cells, lat, lng
     
+    return config
+
+def main():
+    
+    config = init_config()
+    if not config:
+        log.error('Configuration Error!'); return
+        
     db = sqlite3.connect('db.sqlite')
     db_cur = db.cursor()
-    db_cur.execute("SELECT cell_id FROM 'queque' ORDER BY cell_id")
+    db_cur.execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id" % config.level)
     _tstats = [0, 0, 0, 0]
     
     scan_queque = [x[0] for x in db_cur.fetchall()]
-    # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns
-    
-    if len(scan_queque) == 0:
-    	log.info('Nothing to scan!')
-        return
+    # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns 
+    if len(scan_queque) == 0: log.info('Nothing to scan!'); return
+       
+    api = PGoApi()
+    if api_login(api, config):
+        log.info('API online! Scan starts in 5sec...')
+    else: log.error('Login error!'); return
+    time.sleep(5)
             
-    for queq in scan_queque:    
+    for que in scan_queque:    
                 
         cell_ids = []
         _content = 0
@@ -127,76 +130,56 @@ def main():
         
         log.info('Scan {} of {}.'.format(_tstats[0],(len(scan_queque))))
         
-        cell = CellId.from_token(queq)
+        cell = CellId.from_token(que)
         _ll = CellId.to_lat_lng(cell)
         lat, lng, alt = _ll.lat().degrees, _ll.lng().degrees, 0
         
-        cell_ids = utils.cell_childs_2(cell)
-        
-        timestamps = [0,] * len(cell_ids)
-        response_dict = []
-        
-        _try=1
-        while _try:
-            _try=0     
-            
-            try:
-                api.set_position(lat, lng, alt)
-                response_dict = api.get_map_objects(latitude=lat, longitude=lng, since_timestamp_ms = timestamps, cell_id = cell_ids)
-                if 'status' in response_dict['responses']['GET_MAP_OBJECTS']:
-                    if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 1:
-                        _try=0
-            except:
-                log.error(sys.exc_info()[0])
-                time.sleep(10)
-                _try=1
+        cells = susub_cells(cell)
+        cell_ids = sorted([x.id() for x in cells])
+        #cell_ids = get_cell_ids(lat, lng, 1500)
+        response_dict = get_response(cell_ids, lat, lng, alt, api, config)
                 
         for _map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
-            _cell = CellId(int(_map_cell['s2_cell_id'])).to_token()                        
+            _cell = CellId(_map_cell['s2_cell_id']).to_token()                        
 
             if 'forts' in _map_cell:
                 for _frt in _map_cell['forts']:
                     if 'gym_points' in _frt:
                         _cstats[0]+=1
                         _type = 0
-                        _content = utils.set_bit(_content, 2)
-                        db_cur.execute("REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type) "
-                        "VALUES ('{}','{}',{},{},{},{})".format(_frt['id'],_cell,_frt['latitude'],_frt['longitude'], \
-                        int(_frt['enabled']),0))
+                        _content = set_bit(_content, 2)
+                        db_cur.execute("INSERT OR REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
+                        "VALUES ('{}','{}',{},{},{},{},{})".format(_frt['id'],_cell,_frt['latitude'],_frt['longitude'], \
+                        int(_frt['enabled']),0,int(_map_cell['current_timestamp_ms']/1000)))
                     else:
                         _type = 1; _cstats[1]+=1
-                        _content = utils.set_bit(_content, 1)
-                        db_cur.execute("REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type) "
-                        "VALUES ('{}','{}',{},{},{},{})".format(_frt['id'],_cell,_frt['latitude'],_frt['longitude'], \
-                        int(_frt['enabled']),1))
+                        _content = set_bit(_content, 1)
+                        db_cur.execute("INSERT OR REPLACE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
+                        "VALUES ('{}','{}',{},{},{},{},{})".format(_frt['id'],_cell,_frt['latitude'],_frt['longitude'], \
+                        int(_frt['enabled']),1,int(_map_cell['current_timestamp_ms']/1000)))
                                                              
             if 'spawn_points' in _map_cell:
-                _content = utils.set_bit(_content, 0)
+                _content = set_bit(_content, 0)
                 for _spwn in _map_cell['spawn_points']:
                     _cstats[2]+=1;
                     spwn_id = CellId.from_lat_lng(LatLng.from_degrees(_spwn['latitude'],_spwn['longitude'])).parent(20).to_token()
-                    db_cur.execute("REPLACE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng) "
-                    "VALUES ('{}','{}',{},{})".format(spwn_id,_cell,_spwn['latitude'],_spwn['longitude']))
+                    db_cur.execute("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
+                    "VALUES ('{}','{}',{},{},{})".format(spwn_id,_cell,_spwn['latitude'],_spwn['longitude'],int(_map_cell['current_timestamp_ms']/1000)))
             if 'decimated_spawn_points' in _map_cell:
-                _content = utils.set_bit(_content, 0)
+                _content = set_bit(_content, 0)
                 for _spwn in _map_cell['decimated_spawn_points']:
                     _cstats[2]+=1;
                     spwn_id = CellId.from_lat_lng(LatLng.from_degrees(_spwn['latitude'],_spwn['longitude'])).parent(20).to_token()
-                    db_cur.execute("REPLACE INTO spawns (cell_id, pos_lat, pos_lng) "
-                    "VALUES ('{}','{}',{},{})".format(spwn_id,_cell,_spwn['latitude'],_spwn['longitude']))
-            if 'wild_pokemons' in _map_cell:
-                _content = utils.set_bit(_content, 0)
-                #for _spwn in _map_cell['wild_pokemons']:
-                    #_cstats[2]+=1;
-                    #db_cur.execute("REPLACE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng) "
-                    #"VALUES ('{}','{}',{},{})".format(_spwn['spawn_point_id'],_cell,_spwn['latitude'],_spwn['longitude']))
+                    db_cur.execute("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
+                    "VALUES ('{}','{}',{},{},{})".format(spwn_id,_cell,_spwn['latitude'],_spwn['longitude'],int(_map_cell['current_timestamp_ms']/1000)))
                     
-            db_cur.execute("INSERT OR REPLACE INTO cells (cell_id, content) VALUES ('{}', {})".format(_cell,_content))
+            db_cur.execute("INSERT OR REPLACE INTO cells (cell_id, content, last_scan) "
+            "VALUES ('{}', {}, {})".format(_cell,_content,int(_map_cell['current_timestamp_ms']/1000)))
             
         _tstats[1] += _cstats[0]; _tstats[2] += _cstats[1]; _tstats[3] += _cstats[2]
-        db_cur.execute("DELETE FROM queque WHERE cell_id='{}'".format(cell.to_token()))
+        db_cur.execute("DELETE FROM _queue WHERE cell_id='{}'".format(cell.to_token()))
+        log.info("Found {} Gyms, {} Pokestops, {} Spawns. Sleeping...".format(*_cstats))
         db.commit()
-        log.info("UPSERTed {} Gyms, {} Pokestops, {} Spawns. Sleeping...".format(*_cstats))
         time.sleep(int(config.delay))
 
     log.info('Scanned {} cells; got {} Gyms, {} Pokestops, {} Spawns.'.format(*_tstats))
