@@ -1,6 +1,5 @@
 {
     "auth_service": "ptc",
     "username": "login",
-    "password": "password",
-    "location": "Niantic Inc., 2 Bryant Ste. 220, CA 94105"
+    "password": "password"
 }
