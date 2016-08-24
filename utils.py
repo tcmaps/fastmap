@@ -9,28 +9,32 @@ import uuid
 import platform
 import logging
 
+from pgoapi import PGoApi
 from geopy.geocoders import GoogleV3
 from geographiclib.geodesic import Geodesic
-from pgoapi.exceptions import NotLoggedInException
 from s2sphere import CellId, Angle, LatLng, LatLngRect, Cap, RegionCoverer
 
 log = logging.getLogger(__name__)
 
 # TC's stuff
-def check_db():
+class Status3Exception(Exception):
+    pass
+
+def check_db(dbfile='db.sqlite'):
     
-    if not os.path.isfile('db.sqlite'):
+    if not os.path.isfile(dbfile):
         if os.name =='nt':
-            os.system('copy temp.db db.sqlite')
+            os.system('copy temp.db ' + dbfile)
         elif os.name =='posix':
-            os.system('cp temp.db db.sqlite')
+            os.system('cp temp.db ' + dbfile)
     
-    db = sqlite3.connect('db.sqlite')
+    db = sqlite3.connect(dbfile)
     version = db.cursor().execute("SELECT version FROM '_config'").fetchone()
     
     return version[0]
 
-def init_db(cells, db):
+def init_db(cells, dbfilename):
+    db = sqlite3.connect(dbfilename)
     counter=0    
     for cell in cells:
         db.cursor().execute("INSERT OR IGNORE INTO _queue (cell_id,cell_level) "
@@ -39,7 +43,9 @@ def init_db(cells, db):
     db.commit()
     return counter
 
-def api_login(api, config):
+def api_init(config):
+    api = PGoApi()
+    
     api.set_position(360,360,0)  
     api.set_authentication(provider = config.auth_service, username = config.username, password =  config.password)
     api.activate_signature(get_encryption_lib_path())
@@ -48,38 +54,31 @@ def api_login(api, config):
     response = api.get_inventory()
     if 'status_code' in response:
         if response['status_code'] == 1 or response['status_code'] == 2:
-            return True
+            return api
         elif response['status_code'] == 3:
-            print('Account banned!')
-            return False
-        else: return False
+            log.error('Account banned!'); return None
+        else: return None
 
 def get_response(cell_ids, lat, lng, alt, api, config):
     
     timestamps = [0,] * len(cell_ids)
     response_dict = []
+    delay = 11
     
-    _try=1
-    while _try:
-        _try=0     
-        
-        try:
-            api.set_position(lat, lng, alt)
-            response_dict = api.get_map_objects(latitude=lat, longitude=lng, since_timestamp_ms = timestamps, cell_id = cell_ids)
-            if 'status' in response_dict['responses']['GET_MAP_OBJECTS']:
-                if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 3: print "Account banned!"; return
-                if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 1:
-                    _try=0
-        
-        except NotLoggedInException:
-            api_login(api, config)
-            time.sleep(10)
-        except:
-            log.error(sys.exc_info()[0])
-            time.sleep(10)
-            _try=1
+    while True:
     
-    return response_dict
+        api.set_position(lat, lng, alt)
+        response_dict = api.get_map_objects(latitude=lat, longitude=lng, since_timestamp_ms = timestamps, cell_id = cell_ids)
+        if 'status' in response_dict['responses']['GET_MAP_OBJECTS']:
+            if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 1:
+                return response_dict
+            if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 3:
+                print "Account banned!"
+                raise Status3Exception
+
+        time.sleep(delay)
+        delay += 5
+
 
 def set_bit(value, bit):
     return value | (1<<bit)
