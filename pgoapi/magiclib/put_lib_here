@@ -1,0 +1,10 @@
+encrypt32bit.dll
+encrypt64bit.dll
+libencrypt-centos-x86-64.so
+libencrypt-freebsd-64.so
+libencrypt-freebsd10-64.so
+libencrypt-linux-arm-32.so
+libencrypt-linux-arm-64.so
+libencrypt-linux-x86-32.so
+libencrypt-linux-x86-64.so
+libencrypt-osx-64.so
