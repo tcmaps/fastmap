@@ -5,11 +5,11 @@ The *fast* PoGo map.
 
 ##Featurette & ToDo:
 
-- [x] map bootstrap data generator
+- [x] *fast* bootstrap data generator
 - [x] standardized database structure
 - [x] forts, gyms, park spawn points
-- [ ] urban spawnpoints
-- [ ] spawn point timing classification
+- [ ] scanning for urban spawnpoints
+- [ ] spawn times classification
 - [ ] threading / multi accounts
 - [ ] GUI / (live) map display
 
@@ -23,10 +23,10 @@ The *fast* PoGo map.
 
 #### Examples
 
-    bootstrap.py -l "Area 51" -r 10000
-... scans a 10,000 meters radius circle
+    bootstrap.py -l "Area 51" -r 9000
+... scans a 9,000 meters radius circle
 
-bootstrap.py -l "37.235, -115.811" -w 10000
-... scans a 10,000 x 10,000m square
+    bootstrap.py -l "37.235, -115.811" -w 9000
+... scans a 9,000 x 9,000 m square
 
 > Written with [StackEdit](https://stackedit.io/).
