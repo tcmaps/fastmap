@@ -37,8 +37,8 @@ import logging
 
 from s2sphere import CellId, LatLng
 from pgoapi.exceptions import NotLoggedInException
-from utils import api_init, get_response, susub_cells, get_cell_ids
-from utils import check_db, init_db, set_bit, cover_circle, cover_square
+from fastmap.utils import api_init, get_response, susub_cells, get_cell_ids
+from fastmap.utils import check_db, init_db, set_bit, cover_circle, cover_square
 
 log = logging.getLogger(__name__)
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
@@ -89,7 +89,7 @@ def init_config():
         return
     
     if config.location:
-        from utils import get_pos_by_name
+        from fastmap.utils import get_pos_by_name
         lat, lng, alt = get_pos_by_name(config.location); del alt
         if config.radius:
             cells = cover_circle(lat, lng, config.radius, config.level)
