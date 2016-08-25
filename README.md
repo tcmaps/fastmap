@@ -33,4 +33,4 @@ The *fast* PoGo map.
 
 
 
-> Written with [StackEdit](https://stackedit.io/).
+
