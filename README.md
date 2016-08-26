@@ -6,11 +6,11 @@ The *fast* PoGo map.
 ##Featurette & ToDo:
 
 - [x] *fast* bootstrap data generator
-- [x] standardized database structure
-- [x] forts, gyms, park spawn points
-- [ ] scanning for urban spawnpoints
+- [x] standardized database structure  
+- [x] forts, gyms, park spawn points   
+- [x] threading / multi accounts     
+- [ ] scanning for urban spawnpoints  
 - [ ] spawn times classification
-- [ ] threading / multi accounts
 - [ ] GUI / (live) map display
 
 ### bootstrap.py Usage:
@@ -19,7 +19,7 @@ The *fast* PoGo map.
 
     bootstrap.py [-h] [-a AUTH_SERVICE] [-u USERNAME] [-p PASSWORD]
                       [-l LOCATION] [-r RADIUS] [-w WIDTH] [-f DBFILE]
-                      [--level LEVEL] [-t DELAY] [-d] [-n]
+                      [-m --minions THREADS] [--level LEVEL] [-t DELAY] [-d] [-n]
 
 #### Examples
 
