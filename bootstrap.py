@@ -32,9 +32,9 @@ import argparse, logging
 import sqlite3
 
 from s2sphere import CellId, LatLng
-from fmcore.db import check_db, fill_db
-from fmcore.apiwrap import api_init, get_response
-from fmcore.utils import set_bit, get_cell_ids, susub_cells, cover_circle, cover_square
+from fastmap.db import check_db, fill_db
+from fastmap.apiwrap import api_init, get_response
+from fastmap.utils import set_bit, get_cell_ids, susub_cells, cover_circle, cover_square
 from pgoapi.exceptions import NotLoggedInException
 
 log = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ def init_config():
         return
     
     if config.location:
-        from fmcore.utils import get_pos_by_name
+        from fastmap.utils import get_pos_by_name
         lat, lng, alt = get_pos_by_name(config.location); del alt
         if config.radius:
             cells = cover_circle(lat, lng, config.radius, config.level)
@@ -116,7 +116,7 @@ def main():
     if api == None:   
         log.error('Login failed!'); return
     else:
-        log.info('API online! Scan starts in 5sec...')
+        log.info('API online! starting Scan...')
     time.sleep(5)
             
     for que in scan_queque:    
