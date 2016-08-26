@@ -44,7 +44,7 @@ def get_cell_ids(cells):
     cell_ids = sorted([x.id() for x in cells])
     return cell_ids
 
-def cover_circle(lat, lng, radius, level):
+def cover_circle(lat, lng, radius, level=15):
     EARTH = 6371000
     region = Cap.from_axis_angle(\
              LatLng.from_degrees(lat, lng).to_point(), \
@@ -55,7 +55,7 @@ def cover_circle(lat, lng, radius, level):
     cells = coverer.get_covering(region)
     return cells
 
-def cover_square(lat, lng, width, level):
+def cover_square(lat, lng, width, level=15):
     offset = int(width / 2)
     g = Geodesic.WGS84
     r = RegionCoverer()
@@ -69,8 +69,8 @@ def cover_square(lat, lng, width, level):
     cells = r.get_covering(LatLngRect.from_point_pair(p1, p2))
     return cells
 
-def get_cell_walk(lat, lng, radius):
-    origin = CellId.from_lat_lng(LatLng.from_degrees(lat, lng)).parent(15)
+def get_cell_walk(lat, lng, radius, level=15):
+    origin = CellId.from_lat_lng(LatLng.from_degrees(lat, lng)).parent(level)
     walk = [origin]
     right = origin.next()
     left = origin.prev()

@@ -32,16 +32,16 @@ import argparse, logging
 import sqlite3
 
 from s2sphere import CellId, LatLng
+from fmcore.db import check_db, fill_db
+from fmcore.apiwrap import api_init, get_response
+from fmcore.utils import set_bit, get_cell_ids, susub_cells, cover_circle, cover_square
 from pgoapi.exceptions import NotLoggedInException
-from fastmap.db import check_db, fill_db
-from fastmap.apiwrap import api_init, get_response
-from fastmap.utils import set_bit, get_cell_ids, susub_cells, cover_circle, cover_square
 
 log = logging.getLogger(__name__)
 
 def init_config():
     parser = argparse.ArgumentParser()     
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(module)10s] [%(levelname)5s] %(message)s')
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(module)10s] [%(levelname)5s] %(message)s')
 
     load   = {}
     config_file = "config.json"
@@ -85,7 +85,7 @@ def init_config():
         return
     
     if config.location:
-        from fastmap.utils import get_pos_by_name
+        from fmcore.utils import get_pos_by_name
         lat, lng, alt = get_pos_by_name(config.location); del alt
         if config.radius:
             cells = cover_circle(lat, lng, config.radius, config.level)

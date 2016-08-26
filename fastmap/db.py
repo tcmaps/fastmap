@@ -1,3 +1,4 @@
+FMDBVERSION = 2.1
 import sqlite3, os, logging
 log = logging.getLogger(__name__)
 
@@ -34,7 +35,8 @@ def create_db(dbfile):
     pos_lat DOUBLE, pos_lng DOUBLE, static_spawner INT DEFAULT (0), nest_spawner INT DEFAULT (0), \
     spawn_time_base TIME, spawn_time_offset TIME, spawn_time_dur TIME, last_scan TIMESTAMP, \
     FOREIGN KEY (cell_id) REFERENCES cells (cell_id) )")
-    dbc.execute("INSERT INTO _config (version) VALUES ('2.1')"); db.commit()
+    dbc.execute("INSERT INTO _config (version) VALUES (%s)" % FMDBVERSION); db.commit()
+    log.info('DB created!')
 
 if __name__ == '__main__':
     create_db('db.sqlite')
