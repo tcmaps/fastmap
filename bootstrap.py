@@ -9,7 +9,7 @@ Author: TC    <reddit.com/u/Tr4sHCr4fT>
 Version: 1.5
 """
 
-import os, sys, time, json
+import os, time, json
 import argparse, logging
 import sqlite3
 
@@ -91,7 +91,6 @@ def main():
     db = sqlite3.connect(config.dbfile)
 
     ques  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
-    quepw = (ques/config.minions)
     
     # some sanity checks   
     if ques == 0: log.info('Nothing to scan!'); return
@@ -103,9 +102,39 @@ def main():
 
     if len(accs) < config.minions: config.minions = len(accs)
     
+    quepw = ( ques / config.minions )
     
     # the fun begins
-    if config.minions == 1:
+    log.info('DB loaded.')
+    
+    # fairly distributing work    
+    if config.minions > 1:
+        tqueue = [] 
+        
+        log.info('-> %d Threads, %d Cells total' % (config.minions, ques))
+        
+        for m in range(0,config.minions):
+                dummy = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
+                                            "LIMIT %d,%d" % (config.level,(m * quepw), quepw)).fetchall()
+                tqueue.append([x[0] for x in dummy])
+        
+        for minion in range(0,config.minions):    
+            log.info('(%2d) Starting Thread %2d...' % (minion+1,minion+1))
+                
+            Minion = FastMapWorker(minion+1, config, accs[minion], tqueue[minion], dblock)
+            Minion.start()
+            time.sleep(5)
+                
+        Minion.join()
+        
+        # one must always do the leftover
+        if config.minions * quepw < ques:
+            log.info("Doing the Rest... ({} cells)".format(ques - config.minions * quepw))
+            config.minions = 1
+        
+        
+    # clever huh
+    if config.minions == 1:    
         
         dummy = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
         % (config.level)).fetchall()
@@ -113,32 +142,12 @@ def main():
         queue = [x[0] for x in dummy]
         
         T = FastMapWorker(0, config, config, queue, dblock)
-        T.start()
+        T.start()        
     
-    # fairly distributing work    
-    else:
-        tqueue = [] 
-        for minion in range(0,config.minions):    
-            
-            for m in range(0,config.minions):
-                dummy = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
-                                            "LIMIT %d,%d" % (config.level,(m * quepw), quepw)).fetchall()
-                tqueue.append([x[0] for x in dummy])
-            
-            log.info('(%2d) Starting Thread %2d...' % (minion+1,minion+1))
-                
-            Minion = FastMapWorker(minion+1, config, accs[minion], tqueue[minion], dblock)
-            Minion.start()
-            time.sleep(1)
-        
-        
-        Minion.join()
-        # one must always do the leftover
-        if config.minions * quepw < ques:
-            log.info("Rest: {}".format(ques - config.minions * quepw))
-            log.info('Please run again with -m 1 to complete!')
-            
-        
+    T.join()
+    log.info('Done!')
+
+
 
 if __name__ == '__main__':
     main()
