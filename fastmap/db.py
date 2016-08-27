@@ -7,19 +7,19 @@ def check_db(dbfile):
     if not os.path.isfile(dbfile):
         create_db(dbfile)
     
-    db = sqlite3.connect(dbfile)
-    version = db.cursor().execute("SELECT version FROM '_config'").fetchone()
+    with sqlite3.connect(dbfile) as db:
+        version = db.cursor().execute("SELECT version FROM '_config'").fetchone()
     
     return version[0]
 
 def fill_db(dbfile, cells):
-    db = sqlite3.connect(dbfile)
-    counter=0    
-    for cell in cells:
-        db.cursor().execute("INSERT OR IGNORE INTO _queue (cell_id,cell_level) "
-                            "VALUES ('{}',{})".format(cell.to_token(),cell.level()))
-        counter+=1
-    db.commit()
+    with sqlite3.connect(dbfile) as db:
+        counter=0    
+        for cell in cells:
+            db.cursor().execute("INSERT OR IGNORE INTO _queue (cell_id,cell_level) "
+                                "VALUES ('{}',{})".format(cell.to_token(),cell.level()))
+            counter+=1
+        db.commit()
     return counter
 
 def create_db(dbfile):
@@ -35,7 +35,7 @@ def create_db(dbfile):
     pos_lat DOUBLE, pos_lng DOUBLE, static_spawner INT DEFAULT (0), nest_spawner INT DEFAULT (0), \
     spawn_time_base TIME, spawn_time_offset TIME, spawn_time_dur TIME, last_scan TIMESTAMP, \
     FOREIGN KEY (cell_id) REFERENCES cells (cell_id) ) WITHOUT ROWID")
-    dbc.execute("INSERT INTO _config (version) VALUES (%s)" % FMDBVERSION); db.commit()
+    dbc.execute("INSERT INTO _config (version) VALUES (%s)" % FMDBVERSION); db.commit(); db.close()
     log.info('DB created!')
 
 if __name__ == '__main__':

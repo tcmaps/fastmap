@@ -26,19 +26,12 @@ def get_pos_by_name(location_name):
         return None
     return (loc.latitude, loc.longitude, loc.altitude)
 
-def get_pokenames(filename):
-    plist = []
-    f = open(filename,'r')
-    for l in f.readlines():
-        plist.append(l.strip())
-    return plist
-
 def get_accounts(filename):
     accs = []
-    f = open(filename,'r')
-    for l in f.readlines():
-        acc = (l.strip().split(':'))
-        accs.append(PoGoAccount('ptc',acc[0],acc[1]))
+    with open(filename,'r') as f:
+        for l in f.readlines():
+            acc = (l.strip().split(':'))
+            accs.append(PoGoAccount('ptc',acc[0],acc[1]))
     return accs
 
 def sub_cells(cell):
