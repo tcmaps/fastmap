@@ -98,9 +98,9 @@ def main():
     if ques < config.minions: config.minions = ques
     
     if not os.path.isfile(config.accfile): config.minions = 1
-    else: accs = get_accounts(config.accfile)
-
-    if len(accs) < config.minions: config.minions = len(accs)
+    else:
+        accs = get_accounts(config.accfile)
+        if len(accs) < config.minions: config.minions = len(accs)
     
     quepw = ( ques / config.minions )
     
