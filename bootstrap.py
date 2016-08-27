@@ -109,39 +109,44 @@ def main():
     
     # fairly distributing work    
     if config.minions > 1:
-        tqueue = [] 
+
+        Minions = []  
         
-        log.info('-> %d Threads, %d Cells total' % (config.minions, ques))
+        log.info('---> %d Threads, %d Cells total' % (config.minions, ques))
         
-        for m in range(0,config.minions):
-                dummy = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
-                                            "LIMIT %d,%d" % (config.level,(m * quepw), quepw)).fetchall()
-                tqueue.append([x[0] for x in dummy])
-        
-        for minion in range(0,config.minions):    
-            log.info('(%2d) Starting Thread %2d...' % (minion+1,minion+1))
-                
-            Minion = FastMapWorker(minion+1, config, accs[minion], tqueue[minion], dblock)
+        for minion in range(0,config.minions):
+            queue = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
+                                            "LIMIT %d,%d" % (config.level,(minion * quepw), quepw)).fetchall()
+            queue = [x[0] for x in queue]
+            Minions.append(FastMapWorker(minion+1, config, accs[minion], queue, dblock));
+
+        time.sleep(3)
+        m = 1
+        for Minion in Minions:    
+            log.info('(%2d) Starting Thread %2d...' % (m,m))
             Minion.start()
-            time.sleep(5)
+            time.sleep(0.1)
+            m += 1
                 
         Minion.join()
         
         # one must always do the leftover
         if config.minions * quepw < ques:
             log.info("Doing the Rest... ({} cells)".format(ques - config.minions * quepw))
+            config.username, config.password = accs[0].username, accs[0].password
             config.minions = 1
         
         
     # clever huh
     if config.minions == 1:    
         
-        dummy = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
+        queue = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
         % (config.level)).fetchall()
         # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns 
-        queue = [x[0] for x in dummy]
+        queue = [x[0] for x in queue]
         
         T = FastMapWorker(0, config, config, queue, dblock)
+        time.sleep(5)
         T.start()        
     
     T.join()

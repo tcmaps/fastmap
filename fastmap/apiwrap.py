@@ -20,7 +20,7 @@ def api_init(account):
 
     api.set_position(360,360,0)  
     api.set_authentication(provider = account.auth_service, username = account.username, password =  account.password)
-    api.activate_signature(get_encryption_lib_path()); api.get_player()
+    api.activate_signature(get_encryption_lib_path()); time.sleep(1); api.get_player()
 
     time.sleep(1)
     response = api.get_inventory()
