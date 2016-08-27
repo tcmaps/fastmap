@@ -38,7 +38,8 @@ def init_config():
     parser.add_argument("-w", "--width", help="area square width", type=int)
     parser.add_argument("--dbfile", help="DB filename", default='db.sqlite')
     parser.add_argument("--accfile", help="ptc account list", default='accounts.txt')
-    parser.add_argument("--level", help="cell level used for tiling", default=13, type=int)
+    parser.add_argument("--level", help="cell level used for tiling", default=12, type=int)
+    parser.add_argument("--maxq", help="maximum queue per worker", default=1000, type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-m", "--minions", help="thread / worker count", default=10, type=int)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
@@ -95,61 +96,68 @@ def main():
     # some sanity checks   
     if ques == 0: log.info('Nothing to scan!'); return
     
-    if ques < config.minions: config.minions = ques
-    
     if not os.path.isfile(config.accfile): config.minions = 1
     else:
         accs = get_accounts(config.accfile)
         if len(accs) < config.minions: config.minions = len(accs)
     
-    quepw = ( ques / config.minions )
+    while ques:
     
-    # the fun begins
-    log.info('DB loaded.')
+        if ques < config.minions: config.minions = ques
+        
+        quepw = ( ques / config.minions )
+        if quepw > config.maxq : quepw = config.maxq
+        
+        # the fun begins
+        log.info('DB loaded.')
+        
+        # fairly distributing work    
+        if config.minions > 1:
     
-    # fairly distributing work    
-    if config.minions > 1:
-
-        Minions = []  
-        
-        log.info('---> %d Threads, %d Cells total' % (config.minions, ques))
-        
-        for minion in range(0,config.minions):
-            queue = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
-                                            "LIMIT %d,%d" % (config.level,(minion * quepw), quepw)).fetchall()
+            Minions = []  
+            
+            log.info('---> %d Threads, %d Cells total' % (config.minions, ques))
+            
+            for minion in range(0,config.minions):
+                queue = db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id "\
+                                                "LIMIT %d,%d" % ((minion * quepw), quepw)).fetchall()
+                queue = [x[0] for x in queue]
+                Minions.append(FastMapWorker(minion+1, config, accs[minion], queue, dblock));
+    
+            time.sleep(3)
+            m = 1
+            for Minion in Minions:    
+                log.info('(%2d) Starting Thread %2d...' % (m,m))
+                Minion.start()
+                time.sleep(0.1)
+                m += 1
+                    
+            Minion.join()
+            
+            # one must always do the leftover
+            if config.minions * quepw < ques:
+                log.info("Doing the Rest... ({} cells)".format(ques - config.minions * quepw))
+                config.username, config.password = accs[0].username, accs[0].password
+                config.minions = 1
+            
+            
+        # clever huh
+        if config.minions == 1:    
+            
+            queue = db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id "\
+                                        "LIMIT 0,%d" % (config.maxq)).fetchall()
+            # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns 
             queue = [x[0] for x in queue]
-            Minions.append(FastMapWorker(minion+1, config, accs[minion], queue, dblock));
-
-        time.sleep(3)
-        m = 1
-        for Minion in Minions:    
-            log.info('(%2d) Starting Thread %2d...' % (m,m))
-            Minion.start()
-            time.sleep(0.1)
-            m += 1
-                
-        Minion.join()
+            
+            T = FastMapWorker(0, config, config, queue, dblock)
+            time.sleep(5)
+            T.start()        
         
-        # one must always do the leftover
-        if config.minions * quepw < ques:
-            log.info("Doing the Rest... ({} cells)".format(ques - config.minions * quepw))
-            config.username, config.password = accs[0].username, accs[0].password
-            config.minions = 1
-        
-        
-    # clever huh
-    if config.minions == 1:    
-        
-        queue = db.cursor().execute("SELECT cell_id FROM '_queue' WHERE cell_level = %d ORDER BY cell_id "\
-        % (config.level)).fetchall()
-        # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns 
-        queue = [x[0] for x in queue]
-        
-        T = FastMapWorker(0, config, config, queue, dblock)
-        time.sleep(5)
-        T.start()        
+        T.join()
     
-    T.join()
+        ques  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
+        
+    
     log.info('Done!')
 
 
