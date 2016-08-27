@@ -32,7 +32,7 @@ class FastMapWorker(Thread):
         self.api = api_init(self.config)
         if self.api == None:   
             log.error('Login failed!'); return
-        log.info(self.name + " Logged in with account '%s' " % self.config.username)
+        log.info(self.name + " Logged into account '%s' " % self.config.username)
         time.sleep(5)
 
         for work in self.workload:
@@ -51,11 +51,52 @@ class FastMapWorker(Thread):
                 self.api = None
                 self.api = api_init(self.config)
                 continue
-            except: self.log.error(sys.exc_info()[0]); continue
-
-            self.parse_response(response_dict, db)
+            except: self.log.error(sys.exc_info()[0]); continue         
+        
+            stats = [0, 0, 0]
             
-            db.cursor().execute("DELETE FROM _queue WHERE cell_id='{}'".format(self.pos, cell.to_token()))
+            for map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
+                cellid = CellId(map_cell['s2_cell_id']).to_token()
+                content = 0                      
+                
+                dbc = db.cursor()
+                
+                if 'forts' in map_cell:
+                    for fort in map_cell['forts']:
+                        if 'gym_points' in fort:
+                            stats[0]+=1
+                            content = set_bit(content, 2)
+                            dbc.execute("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
+                            "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
+                            int(fort['enabled']),0,int(map_cell['current_timestamp_ms']/1000)))
+                        else:
+                            stats[1]+=1
+                            content = set_bit(content, 1)
+                            dbc.execute("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
+                            "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
+                            int(fort['enabled']),1,int(map_cell['current_timestamp_ms']/1000)))
+                                                                 
+                if 'spawn_points' in map_cell:
+                    content = set_bit(content, 0)
+                    for spawn in map_cell['spawn_points']:
+                        stats[2]+=1;
+                        spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
+                        dbc.execute("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
+                        "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
+                if 'decimated_spawn_points' in map_cell:
+                    content = set_bit(content, 0)
+                    for spawn in map_cell['decimated_spawn_points']:
+                        stats[2]+=1;
+                        spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
+                        dbc.execute("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
+                        "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
+                        
+                dbc.execute("INSERT OR IGNORE INTO cells (cell_id, content, last_scan) "
+                "VALUES ('{}', {}, {})".format(cellid,content,int(map_cell['current_timestamp_ms']/1000)))
+                #self.stats[0] += stats[0]; self.stats[1] += stats[1]; self.stats[2] += stats[2]
+            
+            
+            dbc.execute("DELETE FROM _queue WHERE cell_id='{}'".format(self.pos, work))
                     
             # LOCK
             self.lock.acquire()
@@ -65,54 +106,10 @@ class FastMapWorker(Thread):
         
             self.pos += 1    
             time.sleep(int(self.config.delay))
-    
+              
+            log.debug(self.name+' got {} Gyms, {} Pokestops, {} Spawns.'.format(*stats))
+        
+        
         #log.info(self.name+' Scanned {} cells; got {} Gyms, {} Pokestops, {} Spawns.'.format(self.pos,*self.stats))
 
-
-    def parse_response(self, response_dict, db):            
-        
-        stats = [0, 0, 0]
-        
-        for map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
-            cellid = CellId(map_cell['s2_cell_id']).to_token()
-            content = 0                      
-            
-            dbc = db.cursor()
-            
-            if 'forts' in map_cell:
-                for fort in map_cell['forts']:
-                    if 'gym_points' in fort:
-                        stats[0]+=1
-                        content = set_bit(content, 2)
-                        dbc.execute("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
-                        "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
-                        int(fort['enabled']),0,int(map_cell['current_timestamp_ms']/1000)))
-                    else:
-                        stats[1]+=1
-                        content = set_bit(content, 1)
-                        dbc.execute("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
-                        "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
-                        int(fort['enabled']),1,int(map_cell['current_timestamp_ms']/1000)))
-                                                             
-            if 'spawn_points' in map_cell:
-                content = set_bit(content, 0)
-                for spawn in map_cell['spawn_points']:
-                    stats[2]+=1;
-                    spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
-                    dbc.execute("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
-                    "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
-            if 'decimated_spawn_points' in map_cell:
-                content = set_bit(content, 0)
-                for spawn in map_cell['decimated_spawn_points']:
-                    stats[2]+=1;
-                    spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
-                    dbc.execute("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
-                    "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
-                    
-            dbc.execute("INSERT OR IGNORE INTO cells (cell_id, content, last_scan) "
-            "VALUES ('{}', {}, {})".format(cellid,content,int(map_cell['current_timestamp_ms']/1000)))
-            #self.stats[0] += stats[0]; self.stats[1] += stats[1]; self.stats[2] += stats[2]
-        
-        log.debug(self.name+' got {} Gyms, {} Pokestops, {} Spawns.'.format(*stats))
-        
         return stats
