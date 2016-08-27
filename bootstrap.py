@@ -38,7 +38,7 @@ def init_config():
     parser.add_argument("-w", "--width", help="area square width", type=int)
     parser.add_argument("--dbfile", help="DB filename", default='db.sqlite')
     parser.add_argument("--accfile", help="ptc account list", default='accounts.txt')
-    parser.add_argument("--level", help="cell level used for tiling", default=12, type=int)
+    parser.add_argument("--level", help="cell level used for tiling", default=13, type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-m", "--minions", help="thread / worker count", default=10, type=int)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
