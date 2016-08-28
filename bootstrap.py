@@ -100,16 +100,20 @@ def main():
     else:
         accs = get_accounts(config.accfile)
         if len(accs) < config.minions: config.minions = len(accs)
+
+    if ques < config.minions: config.minions = ques
     
-    while ques:
+    quepw = ( ques / config.minions )
+    if quepw > config.maxq : quepw = config.maxq
     
-        if ques < config.minions: config.minions = ques
+    cycles = (ques / (quepw * config.minions))
+    
+    # the fun begins
+    log.info('DB loaded.')
+    
+    for cycle in range(cycles):
         
-        quepw = ( ques / config.minions )
-        if quepw > config.maxq : quepw = config.maxq
-        
-        # the fun begins
-        log.info('DB loaded.')
+        log.info('Cycle %d of %d.' % (cycle+1,cycles))
         
         # fairly distributing work    
         if config.minions > 1:
