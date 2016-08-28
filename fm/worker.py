@@ -12,9 +12,9 @@ from pgoapi.exceptions import NotLoggedInException
 log = logging.getLogger(__name__)
 
 
-class Overseer(Thread):
+class Mastermind(Thread):
     
-    def __init__(self, threadID, config, worklist, params=None):
+    def __init__(self, threadID, config, worklist=None, params=None):
         Thread.__init__(self)
         self.threadID = threadID
         self.config = config
@@ -23,8 +23,20 @@ class Overseer(Thread):
         self.pos = 0
         self.name = '(%2d)' % self.threadID
 
+class Minion(Thread):
+    
+    def __init__(self, threadID, config, workin, workout, params=None):
+        Thread.__init__(self)
+        self.threadID = threadID
+        self.config = config
+        self.parameters = params
+        self.input = workin        
+        self.output = workout
+        self.pos = 0
+        self.name = '(%2d)' % self.threadID
 
-class RPCworker(Thread):
+
+class RPCworker(Minion):
     
     def __init__(self, threadID, config, account, workin, workout, params=None):
         Thread.__init__(self)
@@ -33,8 +45,8 @@ class RPCworker(Thread):
         self.config.username = account.username
         self.config.password = account.password
         self.parameters = params
-        self.workload = workin        
-        self.results = workout
+        self.input = workin        
+        self.output = workout
         self.pos = 0
         self.name = '(%2d)' % self.threadID
         
@@ -45,12 +57,12 @@ class RPCworker(Thread):
     
     def run(self):
         
-        while self.workload:
+        while not self.input.empty:
+                
+            work = self.input.get()
             
-            work = self.workload.get()
-            
-            log.info(self.name + ' Cell %d of %d.' % (self.pos+1,len(self.workload)))         
-            cell = CellId.from_token(work.content)
+            log.debug(self.name + ' does Cell %s.' % (work.index))         
+            cell = CellId.from_token(work.work)
             lat = CellId.to_lat_lng(cell).lat().degrees 
             lng = CellId.to_lat_lng(cell).lng().degrees
             cell_ids = get_cell_ids(sub_cells_normalized(cell, level=15))
@@ -60,43 +72,34 @@ class RPCworker(Thread):
             except Status3Exception:
                 ('Worker %d down: Banned' % self.threadID); return
             except NotLoggedInException:
-                self.workload.put(work)                
+                self.input.put(work)                
                 self.api = None
                 self.api = api_init(self.config)
                 continue
             except:
                 self.log.error(sys.exc_info()[0]); return         
             else:
-                self.result.put(Work(work.id,response_dict))
+                self.output.put(Work(work.index,response_dict))
             finally:
                 if response_dict is None:
-                    self.workload.put(work)
+                    self.input.put(work)
                 time.sleep(self.config.delay)
-
+        
         return None
 
             
-class MapWorker(Thread):
-    
-    def __init__(self, threadID, workin, workout, params=None):
-        Thread.__init__(self)
-        self.threadID = threadID
-        self.parameters = params
-        self.workload = workin        
-        self.results = workout
-        self.pos = 0
-        self.name = '(%2d)' % self.threadID
+class MapWorker(Minion):
         
     def run(self):
         
-        while self.workload:
+        while not self.input.empty:
             
-            work = self.workload.get()
+            work = self.input.get()
             
             stats = [0, 0, 0]
             querys = []
             
-            for map_cell in work.content['responses']['GET_MAP_OBJECTS']['map_cells']:
+            for map_cell in work.work['responses']['GET_MAP_OBJECTS']['map_cells']:
                 cellid = CellId(map_cell['s2_cell_id']).to_token()
                 content = 0                      
                 
@@ -135,41 +138,48 @@ class MapWorker(Thread):
 
             log.debug(self.name + ' got {} Gyms, {} Pokestops, {} Spawns.'.format(*stats))
         
-        for query in querys:
-            self.results.put(Work(work.id,query)) 
+            for query in querys:
+                self.output.put(Work(work.index,query)) 
 
         return None
 
 
-class DBworker(Thread):
+class DBworker(Minion):
     
-    def __init__(self, threadID, workin, workout, dbfile, dblock, params=None):
+    def __init__(self, threadID, config, workin, workout, dblock, params=None):
         Thread.__init__(self)
         self.threadID = threadID
+        self.config = config
         self.parameters = params
-        self.workload = workin        
-        self.results = workout
+        self.input = workin        
+        self.output = workout
         self.pos = 0
         self.name = '(%2d)' % self.threadID
-        
-        self.db = sqlite3.connect(dbfile)
+        self.db = sqlite3.connect(self.config.dbfile)
         self.lock = dblock 
         
     def run(self):
         
-        works = []
-        while self.workload: works.append(self.workload.get())
+        
+        while not self.input.empty:
             
-        with self.db.cursor() as dbc:
-            self.lock.acquire()
-            for work in works:
-                try: dbc.execute(work.work)
-                except:
-                    self.log.error(sys.exc_info()[0])
-                    self.results.put(Work(work.index,False))
-                    continue
-            
-            try: self.db.commit()
-            except: return
-            finally: self.lock.release()
+            works = []
+            while not self.input.empty:
+                works.append(self.input.get())
+                
+            with self.db.cursor() as dbc:
+                self.lock.acquire()
+                for work in works:
+                    try: dbc.execute(work.work)
+                    except:
+                        self.log.error(sys.exc_info()[0])
+                        self.output.put(Work(work.index,False))
+                        continue
+                
+                try: self.db.commit()
+                except: return
+                finally: self.lock.release()
+                
+            time.sleep(1)
+
 
