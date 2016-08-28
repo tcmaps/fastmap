@@ -13,10 +13,12 @@ import os, time, json
 import argparse, logging
 import sqlite3
 
+from Queue import Queue
 from threading import Lock
-from fastmap.db import check_db, fill_db
-from fastmap.worker import FastMapWorker
-from fastmap.utils import get_accounts, cover_circle, cover_square
+from fm.core import Work
+from fm.db import check_db, fill_db
+from fm.worker import Overseer, DBworker, RPCworker, MapWorker
+from fm.utils import get_accounts, cover_circle, cover_square, PoGoAccount
 
 log = logging.getLogger(__name__)
 
@@ -38,11 +40,13 @@ def init_config():
     parser.add_argument("-w", "--width", help="area square width", type=int)
     parser.add_argument("--dbfile", help="DB filename", default='db.sqlite')
     parser.add_argument("--accfile", help="ptc account list", default='accounts.txt')
+    parser.add_argument("--accounts", help="dont put anything here", default=None)
     parser.add_argument("--level", help="cell level used for tiling", default=12, type=int)
-    parser.add_argument("--maxq", help="maximum queue per worker", default=1000, type=int)
+    parser.add_argument("--limit", help="maximum cells to scan", default=(0-1), type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-m", "--minions", help="thread / worker count", default=10, type=int)
-    parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
+    parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)
+    parser.add_argument("--logfile", help="failed scans log", default='failed.txt')
     config = parser.parse_args()
 
     for key in config.__dict__:
@@ -68,7 +72,7 @@ def init_config():
         return
     
     if config.location:
-        from fastmap.utils import get_pos_by_name
+        from fm.utils import get_pos_by_name
         lat, lng, alt = get_pos_by_name(config.location); del alt
         if config.radius:
             cells = cover_circle(lat, lng, config.radius, config.level)
@@ -83,88 +87,103 @@ def init_config():
     return config
 
 def main():
-    dblock = Lock()
-    
+
     config = init_config()
     if not config:
         log.error('Configuration Error!'); return
         
     db = sqlite3.connect(config.dbfile)
 
-    ques  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
+    qqtot  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
     
     # some sanity checks   
-    if ques == 0: log.info('Nothing to scan!'); return
+    if qqtot == 0: log.info('Nothing to scan!'); return
     
-    if not os.path.isfile(config.accfile): config.minions = 1
+    if not os.path.isfile(config.accfile):
+        config.minions = 1
+        config.accounts = [PoGoAccount('ptc',config.username,config.username)]
     else:
-        accs = get_accounts(config.accfile)
-        if len(accs) < config.minions: config.minions = len(accs)
+        config.accounts = get_accounts(config.accfile)
+        if len(config.accounts) < config.minions: config.minions = len(config.accounts)
 
-    if ques < config.minions: config.minions = ques
+    if config.limit > 0 and config.limit < qqtot: config.limit = qqtot
+
+    if qqtot < config.minions: config.minions = qqtot
     
-    quepw = ( ques / config.minions )
-    if quepw > config.maxq : quepw = config.maxq
+    qqpart = ( qqtot / config.minions )
     
-    cycles = (ques / (quepw * config.minions))
-    
-    # the fun begins
+    # acually load queue
+    cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue'"
+                                              " ORDER BY cell_id LIMIT %d" % qqtot).fetchall()]
     log.info('DB loaded.')
     
-    for cycle in range(cycles):
-        
-        log.info('Cycle %d of %d.' % (cycle+1,cycles))
-        
-        # fairly distributing work    
-        if config.minions > 1:
+    queque = []
+    # the fun begins
+    for cell in cells: queque.append(cell)
     
-            Minions = []  
-            
-            log.info('---> %d Threads, %d Cells total' % (config.minions, ques))
-            
-            for minion in range(0,config.minions):
-                queue = db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id "\
-                                                "LIMIT %d,%d" % ((minion * quepw), quepw)).fetchall()
-                queue = [x[0] for x in queue]
-                Minions.append(FastMapWorker(minion+1, config, accs[minion], queue, dblock));
-    
-            time.sleep(3)
-            m = 1
-            for Minion in Minions:    
-                log.info('(%2d) Starting Thread %2d...' % (m,m))
-                Minion.start()
-                time.sleep(0.1)
-                m += 1
-                    
-            Minion.join()
-            
-            # one must always do the leftover
-            if config.minions * quepw < ques:
-                log.info("Doing the Rest... ({} cells)".format(ques - config.minions * quepw))
-                config.username, config.password = accs[0].username, accs[0].password
-                config.minions = 1
-            
-            
-        # clever huh
-        if config.minions == 1:    
-            
-            queue = db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id "\
-                                        "LIMIT 0,%d" % (config.maxq)).fetchall()
-            # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns 
-            queue = [x[0] for x in queue]
-            
-            T = FastMapWorker(0, config, config, queue, dblock)
-            time.sleep(5)
-            T.start()        
-        
-        T.join()
-    
-        ques  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
-        
-    
+    Mastermind = FastMapWorker(0, config, queque)
+    Mastermind.setDaemon()
+    Mastermind.start()
+    Mastermind.join()
+
     log.info('Done!')
 
 
+
+class FastMapWorker(Overseer):
+    def run(self):
+        
+        Minions = []
+        accounts = self.config.accounts
+        MapQ, RPCq, SQLq, doneQ = Queue()
+        dblock = Lock()
+        db = sqlite3.connect(self.config.dbfile)
+        logf = open(self.config.logfile,'a')
+        
+        if self.workload.__len__():
+            
+            for work in self.workload:
+                RPCq.put(Work(work,work))
+
+            for minion in range(self.config.minions):
+                Minions.append(RPCworker(minion+1, self.config, accounts[minion], RPCq, MapQ))
+                time.sleep(3)
+            
+            for Minion in Minions:
+                Minion.start()
+                time.sleep(1)
+        
+        self.wlen = len(self.workload)
+        
+        while len(self.workload) > 0:
+
+            if not MapQ.empty():
+                MapT = MapWorker(self.config, 0, MapQ, SQLq, self.config.dbfile, dblock); MapT.start()
+            if not SQLq.empty():
+                DBt = DBworker(self.config, 0, SQLq, doneQ); DBt.start()
+            
+            while not doneQ.empty():
+                work = doneQ.get()
+                self.pos += 1
+                if work.work:
+                    with dblock:
+                        db.execute("DELETE FROM _queue WHERE cell_id='%s'" % work.index)
+                else: logf.write(work.index + '\n')
+                self.workload.remove(work.index)
+                
+            time.sleep(1)
+            log.info('% of %' % (self.pos,self.wlen))
+
+
+        # cleaning up
+        logf.flush()
+        
+        for Minion in Minions:
+            Minion.join()
+            
+        MapT.join()
+        DBt.join(3600)
+        logf.close()
 
 if __name__ == '__main__':
     main()

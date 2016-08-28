@@ -39,8 +39,9 @@ def get_response(api, cell_ids, lat, lng, alt=0):
     timestamps = [0,] * len(cell_ids)
     response_dict = []
     delay = 11
+    trys = 3
     
-    while True:
+    while trys:
         api.set_position(lat, lng, alt)
         response_dict = api.get_map_objects(latitude=lat, longitude=lng, since_timestamp_ms = timestamps, cell_id = cell_ids)
         if response_dict:
@@ -54,6 +55,9 @@ def get_response(api, cell_ids, lat, lng, alt=0):
 
         time.sleep(delay)
         delay += 5
+        trys -= 1
+    
+    return None
 
 def get_encryption_lib_path():
     # win32 doesn't mean necessarily 32 bits

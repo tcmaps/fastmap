@@ -3,24 +3,39 @@ import sqlite3
 
 from threading import Thread
 from s2sphere import CellId, LatLng
-from fastmap.apiwrap import api_init, get_response, Status3Exception
-from fastmap.utils import set_bit, get_cell_ids, sub_cells_normalized
+
+from fm.core import Work
+from fm.apiwrap import api_init, get_response, Status3Exception
+from fm.utils import set_bit, get_cell_ids, sub_cells_normalized
 from pgoapi.exceptions import NotLoggedInException
 
 log = logging.getLogger(__name__)
 
-class FastMapWorker(Thread):
+
+class Overseer(Thread):
     
-    def __init__(self, threadID, config, account, work, lock):
+    def __init__(self, threadID, config, worklist, params=None):
         Thread.__init__(self)
         self.threadID = threadID
         self.config = config
-        self.lock = lock
+        self.parameters = params
+        self.workload = worklist        
+        self.pos = 0
+        self.name = '(%2d)' % self.threadID
+
+
+class RPCworker(Thread):
+    
+    def __init__(self, threadID, config, account, workin, workout, params=None):
+        Thread.__init__(self)
+        self.threadID = threadID
+        self.config = config
         self.config.username = account.username
         self.config.password = account.password
-        self.workload = work
+        self.parameters = params
+        self.workload = workin        
+        self.results = workout
         self.pos = 0
-        self.stats = [0, 0, 0]
         self.name = '(%2d)' % self.threadID
         
         self.api = api_init(self.config)
@@ -30,14 +45,12 @@ class FastMapWorker(Thread):
     
     def run(self):
         
-        if len(self.workload) == 0: return
-
-        db = sqlite3.connect(self.config.dbfile)
-
-        for work in self.workload:
+        while self.workload:
+            
+            work = self.workload.get()
             
             log.info(self.name + ' Cell %d of %d.' % (self.pos+1,len(self.workload)))         
-            cell = CellId.from_token(work)
+            cell = CellId.from_token(work.content)
             lat = CellId.to_lat_lng(cell).lat().degrees 
             lng = CellId.to_lat_lng(cell).lng().degrees
             cell_ids = get_cell_ids(sub_cells_normalized(cell, level=15))
@@ -47,15 +60,43 @@ class FastMapWorker(Thread):
             except Status3Exception:
                 ('Worker %d down: Banned' % self.threadID); return
             except NotLoggedInException:
+                self.workload.put(work)                
                 self.api = None
                 self.api = api_init(self.config)
                 continue
-            except: self.log.error(sys.exc_info()[0]); continue         
+            except:
+                self.log.error(sys.exc_info()[0]); return         
+            else:
+                self.result.put(Work(work.id,response_dict))
+            finally:
+                if response_dict is None:
+                    self.workload.put(work)
+                time.sleep(self.config.delay)
+
+        return None
+
+            
+class MapWorker(Thread):
+    
+    def __init__(self, threadID, workin, workout, params=None):
+        Thread.__init__(self)
+        self.threadID = threadID
+        self.parameters = params
+        self.workload = workin        
+        self.results = workout
+        self.pos = 0
+        self.name = '(%2d)' % self.threadID
         
+    def run(self):
+        
+        while self.workload:
+            
+            work = self.workload.get()
+            
             stats = [0, 0, 0]
             querys = []
             
-            for map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
+            for map_cell in work.content['responses']['GET_MAP_OBJECTS']['map_cells']:
                 cellid = CellId(map_cell['s2_cell_id']).to_token()
                 content = 0                      
                 
@@ -91,28 +132,44 @@ class FastMapWorker(Thread):
                         
                 querys.append("INSERT OR IGNORE INTO cells (cell_id, content, last_scan) "
                 "VALUES ('{}', {}, {})".format(cellid,content,int(map_cell['current_timestamp_ms']/1000)))
-                #self.stats[0] += stats[0]; self.stats[1] += stats[1]; self.stats[2] += stats[2]
-            
-            
-            querys.append("DELETE FROM _queue WHERE cell_id='{}'".format(work))
-                    
-            # LOCK
-            self.lock.acquire()
-            
-            dbc = db.cursor()
-            for query in querys:
-                dbc.execute(query)
-            db.commit()
-            
-            self.lock.release()
-            # UNLOCK
-        
-            self.pos += 1    
-            time.sleep(int(self.config.delay))
-              
-            log.debug(self.name+' got {} Gyms, {} Pokestops, {} Spawns.'.format(*stats))
-        
-        
-        #log.info(self.name+' Scanned {} cells; got {} Gyms, {} Pokestops, {} Spawns.'.format(self.pos,*self.stats))
 
-        return stats
+            log.debug(self.name + ' got {} Gyms, {} Pokestops, {} Spawns.'.format(*stats))
+        
+        for query in querys:
+            self.results.put(Work(work.id,query)) 
+
+        return None
+
+
+class DBworker(Thread):
+    
+    def __init__(self, threadID, workin, workout, dbfile, dblock, params=None):
+        Thread.__init__(self)
+        self.threadID = threadID
+        self.parameters = params
+        self.workload = workin        
+        self.results = workout
+        self.pos = 0
+        self.name = '(%2d)' % self.threadID
+        
+        self.db = sqlite3.connect(dbfile)
+        self.lock = dblock 
+        
+    def run(self):
+        
+        works = []
+        while self.workload: works.append(self.workload.get())
+            
+        with self.db.cursor() as dbc:
+            self.lock.acquire()
+            for work in works:
+                try: dbc.execute(work.work)
+                except:
+                    self.log.error(sys.exc_info()[0])
+                    self.results.put(Work(work.index,False))
+                    continue
+            
+            try: self.db.commit()
+            except: return
+            finally: self.lock.release()
+

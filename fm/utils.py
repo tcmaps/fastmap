@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import re
 import math
 import logging
 
@@ -20,11 +21,22 @@ def set_bit(value, bit):
     return value | (1<<bit)
 
 def get_pos_by_name(location_name):
-    geolocator = GoogleV3()
-    loc = geolocator.geocode(location_name)
-    if not loc:
-        return None
-    return (loc.latitude, loc.longitude, loc.altitude)
+    prog = re.compile("^(\-?\d+\.\d+)?,\s*(\-?\d+\.\d+?)$")
+    res = prog.match(location_name)
+    latitude, longitude, altitude = None, None, None
+    if res:
+        latitude, longitude, altitude = float(res.group(1)), float(res.group(2)), 0
+    else:
+        geolocator = GoogleV3()
+        loc = geolocator.geocode(location_name, timeout=10)
+        if loc:
+            log.info("Location for '%s' found: %s", location_name, loc.address)
+            log.info('Coordinates (lat/long/alt) for location: %s %s %s', loc.latitude, loc.longitude, loc.altitude)
+            latitude, longitude, altitude = loc.latitude, loc.longitude, loc.altitude
+        else:
+            return None
+
+    return (latitude, longitude, altitude)
 
 def get_accounts(filename):
     accs = []
@@ -48,8 +60,10 @@ def susub_cells(cell):
     return sorted(cells)
 
 def sub_cells_normalized(cell, level=15):
+    if cell.level() == level:
+        return [cell]
+    
     cells = [cell]
-
     for dummy in range(level-cell.level()):
         loopcells = cells; cells = []
         for loopcell in loopcells:
