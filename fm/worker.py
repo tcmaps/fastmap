@@ -4,13 +4,14 @@ import sqlite3
 from threading import Thread
 from s2sphere import CellId, LatLng
 
+from time import sleep
 from fm.core import Work
 from fm.apiwrap import api_init, get_response, Status3Exception
 from fm.utils import set_bit, get_cell_ids, sub_cells_normalized
 from pgoapi.exceptions import NotLoggedInException
 
 log = logging.getLogger(__name__)
-
+logging.getLogger(__name__).setLevel(logging.DEBUG)
 
 class Mastermind(Thread):
     
@@ -21,7 +22,10 @@ class Mastermind(Thread):
         self.parameters = params
         self.workload = worklist        
         self.pos = 0
-        self.name = '(%2d)' % self.threadID
+        self.name = '[Master %2d]' % self.threadID
+        
+    def run(self):
+        pass
 
 class Minion(Thread):
     
@@ -33,7 +37,10 @@ class Minion(Thread):
         self.input = workin        
         self.output = workout
         self.pos = 0
-        self.name = '(%2d)' % self.threadID
+        self.name = '[Minion %2d]' % self.threadID
+    
+    def run(self):
+        pass
 
 
 class RPCworker(Minion):
@@ -48,17 +55,20 @@ class RPCworker(Minion):
         self.input = workin        
         self.output = workout
         self.pos = 0
-        self.name = '(%2d)' % self.threadID
+        self.name = '[RPC W. %2d]' % self.threadID
         
         self.api = api_init(self.config)
         if self.api == None:   
-            log.error('Login failed!'); return
+            log.error(self.name + 'Login failed!'); return
         log.info(self.name + " Logged into account '%s' " % self.config.username)
     
     def run(self):
         
-        while not self.input.empty:
-                
+        pass
+        while True:
+            
+            if self.input.empty(): sleep(1); continue
+
             work = self.input.get()
             
             log.debug(self.name + ' does Cell %s.' % (work.index))         
@@ -70,7 +80,7 @@ class RPCworker(Minion):
             try:
                 response_dict = get_response(self.api, cell_ids, lat, lng)
             except Status3Exception:
-                ('Worker %d down: Banned' % self.threadID); return
+                log.critical('Worker %d down: Banned' % self.threadID); return
             except NotLoggedInException:
                 self.input.put(work)                
                 self.api = None
@@ -85,15 +95,17 @@ class RPCworker(Minion):
                     self.input.put(work)
                 time.sleep(self.config.delay)
         
-        return None
+        pass
 
             
 class MapWorker(Minion):
         
     def run(self):
+        self.name = '[Map W. %2d]' % self.threadID 
         
-        while not self.input.empty:
-            
+        pass
+        while True:
+            if self.input.empty(): sleep(1); continue
             work = self.input.get()
             
             stats = [0, 0, 0]
@@ -141,7 +153,7 @@ class MapWorker(Minion):
             for query in querys:
                 self.output.put(Work(work.index,query)) 
 
-        return None
+        #return None
 
 
 class DBworker(Minion):
@@ -154,32 +166,39 @@ class DBworker(Minion):
         self.input = workin        
         self.output = workout
         self.pos = 0
-        self.name = '(%2d)' % self.threadID
-        self.db = sqlite3.connect(self.config.dbfile)
+        self.name = '[SQL W. %2d]' % self.threadID
         self.lock = dblock 
         
     def run(self):
         
-        
-        while not self.input.empty:
+        pass 
+        with sqlite3.connect(self.config.dbfile) as db:
             
-            works = []
-            while not self.input.empty:
-                works.append(self.input.get())
-                
-            with self.db.cursor() as dbc:
-                self.lock.acquire()
-                for work in works:
-                    try: dbc.execute(work.work)
-                    except:
-                        self.log.error(sys.exc_info()[0])
-                        self.output.put(Work(work.index,False))
-                        continue
-                
-                try: self.db.commit()
-                except: return
-                finally: self.lock.release()
-                
-            time.sleep(1)
+            while True:
+                if self.input.empty(): sleep(1); continue
 
+                works = []
+                while not self.input.empty():
+                    works.append(self.input.get())
+                    
+                if len(works) > 0:
+                    dbc = db.cursor()
+                    
+                    self.lock.acquire()
+                    for work in works:
+                        #try:
+                        dbc.execute(work.work)
+                        #except:
+                        #    log.error(sys.exc_info()[0])
+                        #    self.output.put(Work(work.index,False))
+                        #    continue
+                
+                    db.commit()
+                    #except: continue
+                    #finally:
+                    self.lock.release()
+                
+                    log.debug(self.name + ' inserted %d Querys.' % len(works))
+                    
+                sleep(1)
 

@@ -9,12 +9,11 @@ Author: TC    <reddit.com/u/Tr4sHCr4fT>
 Version: 1.5
 """
 
-import os, time, json
-import argparse, logging
-import sqlite3, threading
-
+import os, json, sqlite3, argparse, logging
+from time import sleep
 from Queue import Queue
 from threading import Lock
+
 from fm.core import Work
 from fm.db import check_db, fill_db
 from fm.worker import Mastermind, DBworker, RPCworker, MapWorker 
@@ -24,8 +23,10 @@ log = logging.getLogger(__name__)
 
 def init_config():
     parser = argparse.ArgumentParser()     
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(module)10s] [%(levelname)5s] %(message)s')
-
+    logging.basicConfig(level=logging.INFO,\
+                        format='[%(levelname)5s]%(module)10s %(asctime)s %(message)s', datefmt="%d.%m.%y %H:%M:%S")
+    if os.path.isfile('DEBUG'): logging.getLogger(__name__).setLevel(logging.DEBUG)
+    
     load   = {}
     config_file = "config.json"
     if os.path.isfile(config_file):
@@ -43,7 +44,7 @@ def init_config():
     parser.add_argument("--accounts", help="dont put anything here", default=None)
     parser.add_argument("--level", help="cell level used for tiling", default=12, type=int)
     parser.add_argument("--limit", help="maximum cells to scan", default=(0-1), type=int)
-    parser.add_argument("--quelen", help="maximum cells in RAM", default=(1000), type=int)
+    #parser.add_argument("--quelen", help="maximum cells in RAM", default=(1000), type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-m", "--minions", help="thread / worker count", default=10, type=int)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)
@@ -58,7 +59,9 @@ def init_config():
         log.error("Invalid Auth service specified! ('ptc' or 'google')")
         return None
 
-    if config.debug or os.path.isfile('DEBUG'):
+    if config.debug:
+        logging.getLogger(__name__).setLevel(logging.DEBUG)
+        logging.getLogger("worker").setLevel(logging.DEBUG)
         logging.getLogger("requests").setLevel(logging.DEBUG)
         logging.getLogger("pgoapi").setLevel(logging.DEBUG)
         logging.getLogger("rpc_api").setLevel(logging.DEBUG)
@@ -97,9 +100,8 @@ def main():
     if not config:
         log.error('Configuration Error!'); return
         
-    db = sqlite3.connect(config.dbfile)
-    log.info('DB loaded.')
-    qqtot = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
+    with sqlite3.connect(config.dbfile) as db:
+        qqtot = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
     
     # some sanity checks   
     if qqtot == 0: log.info('Nothing to scan!'); return
@@ -111,15 +113,11 @@ def main():
         config.accounts = get_accounts(config.accfile)
         if len(config.accounts) < config.minions: config.minions = len(config.accounts)
 
-    if config.limit > 0 and config.limit < qqtot: config.limit = qqtot
+    if config.limit > 0 and config.limit < qqtot: qqtot = config.limit 
 
     if qqtot < config.minions: config.minions = qqtot
-    
-    qqpart = ( qqtot / config.minions )
-    
 
     # the fun begins
-    
     Overseer = FastMapWorker(0, config)
     #Mastermind.setDaemon()
     Overseer.start()
@@ -132,7 +130,6 @@ def main():
 class FastMapWorker(Mastermind):
     def run(self):
 
-        qfilled = 0
         Minions = []
         accounts = self.config.accounts
         
@@ -140,59 +137,53 @@ class FastMapWorker(Mastermind):
       = Queue(), Queue(), Queue(), Queue()
         
         dblock = Lock()
-        db = sqlite3.connect(self.config.dbfile)
         logf = open(self.config.logfile,'a')
         log.info('DB loaded...')
         
         log.debug('Filling Queue...')
-        cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id"
-        " LIMIT %d,%d" % ((qfilled*self.config.quelen),self.config.quelen)).fetchall()]; qfilled +=1
+        with sqlite3.connect(self.config.dbfile) as db:
+            cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id"
+            " LIMIT %d" % 2).fetchall()]
         for cell in cells:
-                RPCq.put(Work(cell,cell))  
+                RPCq.put(Work(cell,cell)) 
         
-        log.debug('Initializing RPC threads...')
-        for minion in range(2):#self.config.minions):
+        log.debug('Initializing threads...')
+        for minion in range(1):#self.config.minions):
             Minions.append(RPCworker(minion+1, self.config, accounts[minion], RPCq, MapQ))
-            time.sleep(3)
-        
-        log.debug('Starting RPC threads...')    
+            sleep(3)
+
+        MapT = MapWorker(0, self.config, MapQ, SQLq)
+        DBt = DBworker(0, self.config, SQLq, doneQ, dblock)
+ 
+        sleep(5)
+        log.debug('Starting threads...')    
         for Minion in Minions:
             Minion.start()
-            time.sleep(1)
+            sleep(1)
+        
+        MapT.start()
+        DBt.start()
+        
+        with sqlite3.connect(self.config.dbfile) as db:
 
-        while not killswitch:
-            
-            if RPCq.qsize() < self.config.quelen:
-                log.debug('Refilling Queue...')
-                cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id"
-                " LIMIT %d,%d" % ((qfilled*self.config.quelen),self.config.quelen)).fetchall()]; qfilled +=1
-                for cell in cells:
-                        RPCq.put(Work(cell,cell))              
-
-            if not MapQ.empty():
-                log.debug('Processing responses...')
-                MapT = MapWorker(0, self.config, MapQ, SQLq); MapT.start()
-
-            if not SQLq.empty():
-                log.debug('Saving to Database...')
-                DBt = DBworker(0, self.config, SQLq, doneQ, dblock); DBt.start()
+            while not killswitch:
                 
-            while not doneQ.empty():
-                work = doneQ.get()
-                self.pos += 1
-                if work.work:
-                    with dblock:
-                        db.execute("DELETE FROM _queue WHERE cell_id='%s'" % work.index)
-                    log.debug('Cell %s marked as done...' % work.index)
-                else:
-                    logf.write(work.index + '\n')
-                    log.debug('Cell %s marked as failed...' % work.index)
+                while not doneQ.empty():
+                    work = doneQ.get()
                     
-                time.sleep(1)
-                log.debug(threading.enumerate())
+                    if work.work:
+                        with db.cursor() as cursor:
+                            with dblock:
+                                cursor.execute("DELETE FROM _queue WHERE cell_id='%s'" % work.index)
+                        log.debug('Cell %s marked as done...' % work.index); self.pos += 1 
+                    else:
+                        logf.write(work.index + '\n'); self.pos += 1 
+                        log.debug('Cell %s marked as failed...' % work.index)
+                        
+                    sleep(1)
+                    
                 log.info('%d of %d' % (self.pos,qqtot))
-            
-            time.sleep(1)
+                sleep(1); log.debug('Ping.')
 
         # cleaning up
         logf.flush()
