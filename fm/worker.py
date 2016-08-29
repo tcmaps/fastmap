@@ -185,18 +185,19 @@ class DBworker(Minion):
                     self.lock.acquire()
                     
                     try: 
-                        for work in work.work:
-                            dbc.execute(work.work)
+                        for query in work.work:
+                            dbc.execute(query)
                         db.commit()
                     except:
                         log.error(sys.exc_info()[0])
                         self.output.put(Work(work.index,False))
+                        log.error(self.name + ' Upsert for Cell %s failed..' % work.work)
                         continue
                     else:
                         self.output.put(Work(work.index,True))                    
-                    
+                        log.debug(self.name + ' inserted %d Querys.' % len(work.work))
                     finally: self.lock.release()
                 
-                log.debug(self.name + ' inserted %d Querys.' % len(work.work))
+                
 
 
