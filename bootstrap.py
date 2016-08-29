@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-from imp import acquire_lock
 VERSION = '2.1'
 
 """
@@ -15,9 +14,9 @@ from time import sleep
 from Queue import Queue
 from threading import RLock
 
-from fm.core import Work
+from fm.core import Work, Mastermind, PoisonPill
 from fm.db import check_db, fill_db
-from fm.worker import Mastermind, DBworker, RPCworker, MapWorker 
+from fm.worker import MapRequest, MapParse, DataBase 
 from fm.utils import get_accounts, cover_circle, cover_square, PoGoAccount
 
 log = logging.getLogger(__name__)
@@ -116,20 +115,29 @@ def main():
     if config.limit > 0 and config.limit < qqtot: qqtot = config.limit 
 
     if qqtot < config.minions: config.minions = qqtot
+    
+    # last chance to break
+    sleep(1)
+    sleep(1)
+    sleep(1)
 
     # the fun begins
-    Overseer = FastMapWorker(0, config)
+    Overseer = BootStrap(0, config)
     #Mastermind.setDaemon()
     Overseer.start()
     Overseer.join()
 
-    log.info('Done!')
+    log.info('Dekimashita!')
 
 
 
-class FastMapWorker(Mastermind):
+class BootStrap(Mastermind):
+    
     def run(self):
-
+        
+        global killswitch
+        killme, killswitch = False, False
+        
         Minions = []
         accounts = self.config.accounts
         
@@ -153,26 +161,24 @@ class FastMapWorker(Mastermind):
         log.info('ETA %d:%02d:%02d' % (h, m, s)); del n,h,m,s,tt
         
         log.debug('Initializing threads...')
-        for minion in range(self.config.minions):
-            Minions.append(RPCworker(minion+1, self.config, accounts[minion], RPCq, MapQ))
-            sleep(3)
+        for m in range(self.config.minions):
+            Minions.append(MapRequest(m+1, self.config, RPCq, MapQ, accounts[m]))
 
-        MapT = MapWorker(0, self.config, MapQ, SQLq)
-        DBt = DBworker(0, self.config, SQLq, doneQ, dblock)
- 
-        sleep(5)
+        MapT = MapParse(0, self.config, MapQ, SQLq)
+        DBt = DataBase(0, self.config, SQLq, doneQ, locks=[dblock])
+
         log.debug('Starting threads...')    
         for Minion in Minions:
             Minion.start()
-            sleep(1)
+            sleep(5)
         
         MapT.start()
         DBt.start()
         
         with sqlite3.connect(self.config.dbfile) as db:
 
-            while not killswitch:
-                
+            while not killme:
+
                 while not doneQ.empty():
                     work = doneQ.get()
                     
@@ -195,19 +201,35 @@ class FastMapWorker(Mastermind):
                         log.debug('Cell %s marked as failed.' % work.index)
                         
                     else: log.debug('Cell %s ignored.' % work.index)
-
-                    sleep(1)
+                
+                if not killswitch and self.pos >= qqtot:
+                    killswitch = True
+                                
+                if killswitch and RPCq.empty():
+                    RPCq.put(PoisonPill(broadcast=True))
                     
-                sleep(1); log.debug('Ping.')
+                if killswitch and MapQ.empty():
+                    MapQ.put(PoisonPill(broadcast=True))
+                    
+                if killswitch and SQLq.empty():
+                    SQLq.put(PoisonPill())
+                
+                if killswitch and doneQ.empty():
+                    killme = True
+                
+                    
+                sleep(1); log.debug('Ping.') # I'm still alive
+                
 
         # cleaning up
-        logf.flush()
+            logf.flush()
         
         for Minion in Minions:
             Minion.join()
             
         MapT.join()
-        DBt.join(3600)
+        DBt.join()
+        
         logf.close()
 
 if __name__ == '__main__':

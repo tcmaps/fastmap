@@ -8,14 +8,11 @@ from geopy.geocoders import GoogleV3
 from geographiclib.geodesic import Geodesic
 from s2sphere import CellId, Angle, LatLng, LatLngRect, Cap, RegionCoverer
 
+from fm.apiwrap import PoGoAccount
+
 log = logging.getLogger(__name__)
 
 
-class PoGoAccount():
-    def __init__(self, auth, login, passw):
-        self.auth_service = auth
-        self.username = login
-        self.password = passw
 
 def set_bit(value, bit):
     return value | (1<<bit)

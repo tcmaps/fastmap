@@ -13,9 +13,10 @@ class Params():
         def __init__(self, paramdict):
             self.params = paramdict      
 
-class PoisonPill(Exception):
+class PoisonPill():
         def __init__(self, broadcast=False):
             self.relay = broadcast
+            self.kill = True
             pass
 
 
@@ -24,12 +25,12 @@ class Mastermind(Thread):
     def __init__(self, threadID, config=None, worklist=None, params=None, signals=None, ):
         Thread.__init__(self)
         self.threadID = threadID
+        self.name = '[Master %2d]' % self.threadID
         self.config = config
         self.parameters = params
         self.workload = worklist   
         self.control = signals     
         self.pos = 0
-        self.name = '[Master %2d]' % self.threadID
         self.log = logging.getLogger(self.name)
         
     def run(self):
@@ -39,10 +40,11 @@ class Minion(Thread):
     
     # generic constructor
     def __init__(self, threadID=0, config=None, workin=None, workout=None,\
-                       params=None, signals=None, locks=None, events=None):
+                       params=None, locks=None, events=None, signals=None):
         
         Thread.__init__(self)
         self.threadID = threadID
+        self.name = '[Minion %2d]' % self.threadID
         
         self.preinit()
         
@@ -56,7 +58,6 @@ class Minion(Thread):
         self.work = None
         self.runs = 1
         self.pos = 0
-        self.name = '[Minion %2d]' % self.threadID
         self.log = logging.getLogger(self.name)
         
         self.postinit()
@@ -86,15 +87,20 @@ class Minion(Thread):
                     self.input.put(self.work)
             
             # stop if received
-            if self.work is PoisonPill:
-                self.runs = False
-                break
+            if hasattr(self.work, 'kill'):
+                if self.work.kill is True:
+                    self.runs = False
+                    break
+
+            #if self.work is PoisonPill:
+            #    self.runs = False
+            #    break
             
-            # put back work if fails
-            try: self.main()
-            except Exception as e:
-                self.input.put(self.work)
-                self.log.error(e)
+            # put back last work on error
+            self.main()
+            #except Exception as e:
+                #self.input.put(self.work)
+                #self.log.error(e)
                 
         self.cleanup()
         

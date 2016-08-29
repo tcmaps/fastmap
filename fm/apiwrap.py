@@ -15,6 +15,12 @@ log = logging.getLogger(__name__)
 class Status3Exception(Exception):
     pass
 
+class PoGoAccount():
+    def __init__(self, auth, login, passw):
+        self.auth_service = auth
+        self.username = login
+        self.password = passw
+
 def api_init(account):
     api = PGoApi()
 
@@ -32,7 +38,6 @@ def api_init(account):
             elif response['status_code'] == 3:
                 log.error('Account banned!'); return None
             else: return None
-
 
 def get_response(api, cell_ids, lat, lng, alt=0):
     
