@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import logging
 from threading import Thread
 
@@ -13,10 +12,9 @@ class Params():
         def __init__(self, paramdict):
             self.params = paramdict      
 
-class PoisonPill():
+class PoisonPill(object):
         def __init__(self, broadcast=False):
             self.relay = broadcast
-            self.kill = True
             pass
 
 
@@ -80,27 +78,27 @@ class Minion(Thread):
             # sanity check
             if self.work == None:
                 continue
-            
-            # broadcast to other threads
-            if hasattr(self.work, 'relay'):
-                if self.work.relay is True:
-                    self.input.put(self.work)
-            
-            # stop if received
-            if type(self.work) is PoisonPill:
+
+            if type(self.work) is PoisonPill:            
+                # broadcast to other threads
+                if hasattr(self.work, 'relay'):
+                    if self.work.relay is True:
+                        self.input.put(self.work)
+                # then stop self
                 self.runs = False
-                break
+                self.cleanup()
+                self.log.debug('Sayonara!')
+                return
             
             # put back last work on error
-            self.main()
-            #except Exception as e:
-                #self.input.put(self.work)
-                #self.log.error(e)
-                
+            try: self.main()
+            except Exception as e:
+                self.input.put(self.work)
+                self.log.error(e)
+        
         self.cleanup()
         
         return
-
 
     # override these to customize
     

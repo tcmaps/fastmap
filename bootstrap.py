@@ -204,6 +204,7 @@ class BootStrap(Mastermind):
                 
                 if not killswitch and self.pos >= qqtot:
                     killswitch = True
+                    log.info('Stopping threads...')
                                 
                 if killswitch and RPCq.empty():
                     RPCq.put(PoisonPill(broadcast=True))
@@ -221,7 +222,7 @@ class BootStrap(Mastermind):
                 sleep(1); log.debug('Ping.') # I'm still alive
                 
 
-        # cleaning up
+            log.info('Cleaning up...')
             logf.flush()
         
         for Minion in Minions:
