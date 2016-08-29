@@ -143,12 +143,12 @@ class FastMapWorker(Mastermind):
         log.debug('Filling Queue...')
         with sqlite3.connect(self.config.dbfile) as db:
             cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id"
-            " LIMIT %d" % 2).fetchall()]
+            " LIMIT %d" % qqtot).fetchall()]
         for cell in cells:
                 RPCq.put(Work(cell,cell)) 
         
         log.debug('Initializing threads...')
-        for minion in range(1):#self.config.minions):
+        for minion in range(self.config.minions):
             Minions.append(RPCworker(minion+1, self.config, accounts[minion], RPCq, MapQ))
             sleep(3)
 

@@ -186,19 +186,17 @@ class DBworker(Minion):
                     
                     self.lock.acquire()
                     for work in works:
-                        #try:
-                        dbc.execute(work.work)
-                        #except:
-                        #    log.error(sys.exc_info()[0])
-                        #    self.output.put(Work(work.index,False))
-                        #    continue
+                        try: dbc.execute(work.work)
+                        except:
+                            log.error(sys.exc_info()[0])
+                            self.output.put(Work(work.index,False))
+                            continue
                 
-                    db.commit()
-                    #except: continue
-                    #finally:
-                    self.lock.release()
+                    try: db.commit()
+                    except: continue
+                    finally: self.lock.release()
                 
                     log.debug(self.name + ' inserted %d Querys.' % len(works))
-                    
-                sleep(1)
+
+
 
