@@ -87,14 +87,9 @@ class Minion(Thread):
                     self.input.put(self.work)
             
             # stop if received
-            if hasattr(self.work, 'kill'):
-                if self.work.kill is True:
-                    self.runs = False
-                    break
-
-            #if self.work is PoisonPill:
-            #    self.runs = False
-            #    break
+            if type(self.work) is PoisonPill:
+                self.runs = False
+                break
             
             # put back last work on error
             self.main()
