@@ -177,26 +177,26 @@ class DBworker(Minion):
             while True:
                 if self.input.empty(): sleep(1); continue
 
-                works = []
-                while not self.input.empty():
-                    works.append(self.input.get())
+                work = self.input.get()
                     
-                if len(works) > 0:
+                if len(work.work) > 0:
                     dbc = db.cursor()
                     
                     self.lock.acquire()
-                    for work in works:
-                        try: dbc.execute(work.work)
-                        except:
-                            log.error(sys.exc_info()[0])
-                            self.output.put(Work(work.index,False))
-                            continue
-                
-                    try: db.commit()
-                    except: continue
+                    
+                    try: 
+                        for work in work.work:
+                            dbc.execute(work.work)
+                        db.commit()
+                    except:
+                        log.error(sys.exc_info()[0])
+                        self.output.put(Work(work.index,False))
+                        continue
+                    else:
+                        self.output.put(Work(work.index,True))                    
+                    
                     finally: self.lock.release()
                 
-                    log.debug(self.name + ' inserted %d Querys.' % len(works))
-
+                log.debug(self.name + ' inserted %d Querys.' % len(work.work))
 
 
