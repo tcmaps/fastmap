@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from imp import acquire_lock
 VERSION = '2.1'
 
 """
@@ -12,7 +13,7 @@ Version: 1.5
 import os, json, sqlite3, argparse, logging
 from time import sleep
 from Queue import Queue
-from threading import Lock
+from threading import RLock
 
 from fm.core import Work
 from fm.db import check_db, fill_db
@@ -61,7 +62,6 @@ def init_config():
 
     if config.debug:
         logging.getLogger(__name__).setLevel(logging.DEBUG)
-        logging.getLogger("worker").setLevel(logging.DEBUG)
         logging.getLogger("requests").setLevel(logging.DEBUG)
         logging.getLogger("pgoapi").setLevel(logging.DEBUG)
         logging.getLogger("rpc_api").setLevel(logging.DEBUG)
@@ -136,7 +136,7 @@ class FastMapWorker(Mastermind):
         MapQ,    RPCq,    SQLq,    doneQ  \
       = Queue(), Queue(), Queue(), Queue()
         
-        dblock = Lock()
+        dblock = RLock()
         logf = open(self.config.logfile,'a')
         log.info('DB loaded...')
         
@@ -146,6 +146,11 @@ class FastMapWorker(Mastermind):
             " LIMIT %d" % qqtot).fetchall()]
         for cell in cells:
                 RPCq.put(Work(cell,cell)) 
+
+        n = (qqtot / self.config.minions)
+        log.info('Total %d cells, %d Workers, %d cells each.' % (qqtot, self.config.minions, n))
+        tt = (n * self.config.delay + 1); m, s = divmod(tt, 60); h, m = divmod(m, 60)
+        log.info('ETA %d:%02d:%02d' % (h, m, s)); del n,h,m,s,tt
         
         log.debug('Initializing threads...')
         for minion in range(self.config.minions):
@@ -171,18 +176,28 @@ class FastMapWorker(Mastermind):
                 while not doneQ.empty():
                     work = doneQ.get()
                     
-                    if work.work:
-                        with db.cursor() as cursor:
-                            with dblock:
-                                cursor.execute("DELETE FROM _queue WHERE cell_id='%s'" % work.index)
-                        log.debug('Cell %s marked as done...' % work.index); self.pos += 1 
-                    else:
-                        logf.write(work.index + '\n'); self.pos += 1 
-                        log.debug('Cell %s marked as failed...' % work.index)
+                    if work.work is True:
+                        try:
+                            dblock.acquire()
+                            db.cursor().execute("DELETE FROM _queue WHERE cell_id='%s'" % work.index)
+                            db.commit() 
+                            log.debug('Cell %s marked as done.' % work.index); self.pos += 1
+                            log.info('Completed %d of %d Cells.' % (self.pos,qqtot))
+                        except Exception as e:
+                            doneQ.put(work)
+                            log.error(e)
+                            log.debug('Removing Cell %s from Queue failed...' % work.index)
                         
+                        finally: dblock.release()
+                    
+                    elif work.work is False:
+                        logf.write('%s\n' % work.index); self.pos += 1 
+                        log.debug('Cell %s marked as failed.' % work.index)
+                        
+                    else: log.debug('Cell %s ignored.' % work.index)
+
                     sleep(1)
                     
-                log.info('%d of %d' % (self.pos,qqtot))
                 sleep(1); log.debug('Ping.')
 
         # cleaning up

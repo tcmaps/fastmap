@@ -11,7 +11,7 @@ from fm.utils import set_bit, get_cell_ids, sub_cells_normalized
 from pgoapi.exceptions import NotLoggedInException
 
 log = logging.getLogger(__name__)
-logging.getLogger(__name__).setLevel(logging.DEBUG)
+
 
 class Mastermind(Thread):
     
@@ -150,8 +150,7 @@ class MapWorker(Minion):
 
             log.debug(self.name + ' got {} Gyms, {} Pokestops, {} Spawns.'.format(*stats))
         
-            for query in querys:
-                self.output.put(Work(work.index,query)) 
+            self.output.put(Work(work.index,querys)) 
 
         #return None
 
@@ -181,23 +180,21 @@ class DBworker(Minion):
                     
                 if len(work.work) > 0:
                     dbc = db.cursor()
-                    
-                    self.lock.acquire()
-                    
-                    try: 
+
+                    try:
+                        self.lock.acquire()     
                         for query in work.work:
                             dbc.execute(query)
                         db.commit()
-                    except:
-                        log.error(sys.exc_info()[0])
+                    except Exception as e:
+                        log.error(e)
                         self.output.put(Work(work.index,False))
-                        log.error(self.name + ' Upsert for Cell %s failed..' % work.work)
+                        log.error(self.name + ' Upsert for Cell %s failed..' % work.index)
                         continue
                     else:
                         self.output.put(Work(work.index,True))                    
                         log.debug(self.name + ' inserted %d Querys.' % len(work.work))
                     finally: self.lock.release()
-                
-                
 
+                
 
