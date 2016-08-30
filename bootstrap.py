@@ -9,20 +9,28 @@ Author: TC    <reddit.com/u/Tr4sHCr4fT>
 Version: 1.5
 """
 
-import os, time, json
+import os, sys, json
 import argparse, logging
+from time import sleep
 import sqlite3
 
-from threading import Lock
+from s2sphere.sphere import CellId, LatLng
+from sqlite3 import IntegrityError, ProgrammingError, DataError
+from sqlite3 import OperationalError, InterfaceError, DatabaseError
+
+from pgoapi.exceptions import NotLoggedInException
 from fastmap.db import check_db, fill_db
-from fastmap.worker import FastMapWorker
-from fastmap.utils import get_accounts, cover_circle, cover_square
+from fastmap.apiwrap import api_init, get_response, AccountBannedException
+from fastmap.utils import get_accounts, cover_circle, cover_square, get_cell_ids, sub_cells_normalized, set_bit
 
 log = logging.getLogger(__name__)
 
+
 def init_config():
     parser = argparse.ArgumentParser()     
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(module)10s] [%(levelname)5s] %(message)s')
+    logging.basicConfig(level=logging.INFO,\
+                        format='[%(levelname)5s] %(asctime)s %(message)s', datefmt="%d.%m.%y %H:%M:%S")
+    if os.path.isfile('DEBUG'): logging.getLogger(__name__).setLevel(logging.DEBUG)
 
     load   = {}
     config_file = "config.json"
@@ -39,7 +47,7 @@ def init_config():
     parser.add_argument("--dbfile", help="DB filename", default='db.sqlite')
     parser.add_argument("--accfile", help="ptc account list", default='accounts.txt')
     parser.add_argument("--level", help="cell level used for tiling", default=12, type=int)
-    parser.add_argument("--maxq", help="maximum queue per worker", default=1000, type=int)
+    parser.add_argument("--maxq", help="maximum queue per worker", default=500, type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-m", "--minions", help="thread / worker count", default=10, type=int)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
@@ -75,7 +83,7 @@ def init_config():
         elif config.width:
             cells = cover_square(lat, lng, config.width, config.level)
         else: log.error('Area size not given!'); return
-        log.info('Added %d cells to scan queue.' % fill_db(config.dbfile, cells))
+        log.info('Added %d items to scan queue.' % fill_db(config.dbfile, cells))
         del cells, lat, lng
     
     if config.minions < 1: config.minions = 1
@@ -83,87 +91,181 @@ def init_config():
     return config
 
 def main():
-    dblock = Lock()
     
     config = init_config()
     if not config:
         log.error('Configuration Error!'); return
-        
+    
+    minions = config.minions
     db = sqlite3.connect(config.dbfile)
-
-    ques  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
+    log.info('DB loaded.')
+    totalwork  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
     
     # some sanity checks   
-    if ques == 0: log.info('Nothing to scan!'); return
+    if totalwork == 0: log.info('Nothing to scan!'); return
     
-    if not os.path.isfile(config.accfile): config.minions = 1
+    if not os.path.isfile(config.accfile):
+        minions = 1; accounts = [config]
     else:
-        accs = get_accounts(config.accfile)
-        if len(accs) < config.minions: config.minions = len(accs)
+        accounts = get_accounts(config.accfile)
+        if len(accounts) < config.minions: minions = len(accounts)
 
-    if ques < config.minions: config.minions = ques
+    if totalwork < minions: minions = totalwork
     
-    quepw = ( ques / config.minions )
-    if quepw > config.maxq : quepw = config.maxq
+    workpart = ( totalwork / minions )
+    if workpart > config.maxq : workpart = config.maxq
     
-    cycles = (ques / (quepw * config.minions))
+# all OK?   
+    done = 0
+    try:
+# initialize APIs
+        workers = []
+        for m in xrange(minions):
+            log.info('Initializing worker %2d of %2d' % (m,minions))
+            api = api_init(accounts[m]); sleep(3)
+            if api is not None:
+                workers.append(api)
+                log.info("Logged into  '%s'" % accounts[m].username)
+            else: log.error("Login failed for  '%s'" % accounts[m].username)
+        log.info('Workers:%3d' % len(workers))
+# end worker init loop
+
+# ETA
+        n = (totalwork / len(workers))
+        log.info('Total %5d cells, %3d Workers, %5d cells each.' % (totalwork, minions, n))
+        ttot = (n * config.delay + 1); m, s = divmod(ttot, 60); h, m = divmod(m, 60)
+        log.info('ETA %d:%02d:%02d' % (h, m, s)); del h,m,s, ttot, minions
+
+# last chance to abort
+        for i in xrange(3):
+            log.info('Start in %d...' % (3-i)); sleep(1)
+        log.info("Let's go!")
     
-    # the fun begins
-    log.info('DB loaded.')
-    
-    for cycle in range(cycles):
-        
-        log.info('Cycle %d of %d.' % (cycle+1,cycles))
-        
-        # fairly distributing work    
-        if config.minions > 1:
-    
-            Minions = []  
-            
-            log.info('---> %d Threads, %d Cells total' % (config.minions, ques))
-            
-            for minion in range(0,config.minions):
-                queue = db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id "\
-                                                "LIMIT %d,%d" % ((minion * quepw), quepw)).fetchall()
-                queue = [x[0] for x in queue]
-                Minions.append(FastMapWorker(minion+1, config, accs[minion], queue, dblock));
-    
-            time.sleep(3)
-            m = 1
-            for Minion in Minions:    
-                log.info('(%2d) Starting Thread %2d...' % (m,m))
-                Minion.start()
-                time.sleep(0.1)
-                m += 1
+# open DB
+        with sqlite3.connect(config.dbfile) as db:  
+            totalstats = [0, 0, 0, 0]  
+
+## main loop        
+            while done < totalwork and len(workers) > 0:
+##
+ 
+# kill some zombies
+                for i in xrange(len(workers)):
+                    if workers[i] is None:
+                        workers[i].pop
+
+# fetch DB        
+                cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' "
+                            "ORDER BY cell_id LIMIT %d" % ((len(workers)))).fetchall()]
+
+# RPC loop            
+                responses = []
+                delay = float( float(config.delay) / float(len(workers)) )
+                for i in xrange(len(cells)):
                     
-            Minion.join()
-            
-            # one must always do the leftover
-            if config.minions * quepw < ques:
-                log.info("Doing the Rest... ({} cells)".format(ques - config.minions * quepw))
-                config.username, config.password = accs[0].username, accs[0].password
-                config.minions = 1
-            
-            
-        # clever huh
-        if config.minions == 1:    
-            
-            queue = db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id "\
-                                        "LIMIT 0,%d" % (config.maxq)).fetchall()
-            # http://stackoverflow.com/questions/3614277/how-to-strip-from-python-pyodbc-sql-returns 
-            queue = [x[0] for x in queue]
-            
-            T = FastMapWorker(0, config, config, queue, dblock)
-            time.sleep(5)
-            T.start()        
-        
-        T.join()
-    
-        ques  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
-        
-    
-    log.info('Done!')
+                    sleep(delay)     
+                    
+                    cell = CellId.from_token(cells[i])
+                    lat = CellId.to_lat_lng(cell).lat().degrees 
+                    lng = CellId.to_lat_lng(cell).lng().degrees
+                    cell_ids = get_cell_ids(sub_cells_normalized(cell, level=15))
+                    
+                    log.debug('W%2d doing request for %s (%f, %f)' % (i,cells[i],lat,lng))
+                    
+                    try:
+                        response_dict = get_response(workers[i], cell_ids, lat, lng)
+                    except AccountBannedException:
+                        workers[i] = None
+                        log.error('Worker %d down: Banned' % accounts[i])
+                    except NotLoggedInException:
+                        sleep(config.delay / 2) 
+                        workers[i] = None
+                        workers[i] = api_init(accounts[i])
+                        response_dict = get_response(workers[i], cell_ids, lat, lng)
+                    except: log.error(sys.exc_info()[0]); sleep(config.delay) 
+                    finally:
+                        responses.append(response_dict)
+                        
+# end RP loop
 
+# parse loop    
+                querys = []
+                for i in xrange(len(responses)):
+
+                    stats = [0, 0, 0, 0]
+                    response_dict = responses[i]
+                    
+                    if response_dict is None or len(response_dict) == 0: continue
+                    
+                    for map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
+                        cellid = CellId(map_cell['s2_cell_id']).to_token()
+                        stats[0] += 1
+                        content = 0                   
+                        
+                        if 'forts' in map_cell:
+                            for fort in map_cell['forts']:
+                                if 'gym_points' in fort:
+                                    stats[1]+=1
+                                    content = set_bit(content, 2)
+                                    querys.append("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
+                                    "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
+                                    int(fort['enabled']),0,int(map_cell['current_timestamp_ms']/1000)))
+                                else:
+                                    stats[2]+=1
+                                    content = set_bit(content, 1)
+                                    querys.append("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
+                                    "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
+                                    int(fort['enabled']),1,int(map_cell['current_timestamp_ms']/1000)))
+                                                                         
+                        if 'spawn_points' in map_cell:
+                            content = set_bit(content, 0)
+                            for spawn in map_cell['spawn_points']:
+                                stats[3]+=1;
+                                spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
+                                querys.append("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
+                                "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
+                        if 'decimated_spawn_points' in map_cell:
+                            content = set_bit(content, 0)
+                            for spawn in map_cell['decimated_spawn_points']:
+                                stats[3]+=1;
+                                spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
+                                querys.append("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
+                                "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
+                                
+                        querys.append("INSERT OR IGNORE INTO cells (cell_id, content, last_scan) "
+                        "VALUES ('{}', {}, {})".format(cellid,content,int(map_cell['current_timestamp_ms']/1000)))
+                    
+                    log.debug('%s: ' % cells[i] + '%d Cells, %d Gyms, %d Pokestops, %d Spawns.' % tuple(stats))
+                    totalstats[0] += stats[0]; totalstats[1] += stats[1]; totalstats[2] += stats[2]; totalstats[3] += stats[3]
+                    querys.append("DELETE FROM _queue WHERE cell_id='{}'".format(cells[i]))
+                    log.debug('Removing %s from Queue' % cells[i])
+                    done += 1
+# end parse loop            
+
+# save to DB   #f = open('dump.sql','a')
+                try:
+                    dbc = db.cursor()
+                    for query in querys:
+                        dbc.execute(query) #;f.write(query); f.write(';\n')
+
+                except (IntegrityError, ProgrammingError, DataError): 
+                    db.rollback(); log.error('SQL Syntax Error');
+                except (OperationalError, InterfaceError, DatabaseError):
+                    log.critical('Database corrupted or locked'); return
+                except KeyboardInterrupt: db.rollback(); raise KeyboardInterrupt
+                else: db.commit(); log.debug('Inserted %d queries' % len(querys))
+                 
+# feedback                
+                log.info('Queue: %5d done, %5d left' % (done,totalwork-done)) ;sleep(1) #;f.close(); 
+        
+## end main loop        
+        
+            log.info('Total: %5d Cells, %5d Gyms, %5d Pokestops, %5d Spawns.' % (totalstats[0],totalstats[1],totalstats[2],totalstats[3]))
+
+##
+    except KeyboardInterrupt: log.info('Aborted!')
+    else: log.info("Dekimashita!")
+    finally: db.close()
 
 
 if __name__ == '__main__':
