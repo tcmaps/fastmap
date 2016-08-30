@@ -3,36 +3,60 @@
 import time
 import os
 import sys
-import uuid
+import uuid  # @UnusedImport
 import platform
 import logging
 
 from pgoapi import PGoApi
+from pgoapi.exceptions import AuthException
 
 log = logging.getLogger(__name__)
 
 
-class Status3Exception(Exception):
+class AccountBannedException(AuthException):
     pass
+
+class PoGoAccount():
+    def __init__(self, auth, login, passw):
+        self.auth_service = auth
+        self.username = login
+        self.password = passw
+
 
 def api_init(account):
     api = PGoApi()
-
-    api.set_position(360,360,0)  
-    api.set_authentication(provider = account.auth_service, username = account.username, password =  account.password)
-    api.activate_signature(get_encryption_lib_path()); time.sleep(1); api.get_player()
-
-    time.sleep(1)
-    response = api.get_inventory()
     
-    if response:
-        if 'status_code' in response:
-            if response['status_code'] == 1 or response['status_code'] == 2:
-                return api
-            elif response['status_code'] == 3:
-                log.error('Account banned!'); return None
-            else: return None
+    try:
+        api.set_position(360,360,0)  
+        api.set_authentication(provider = account.auth_service,\
+                               username = account.username, password =  account.password)
+        api.activate_signature(get_encryption_lib_path()); time.sleep(1); api.get_player()
+    
+    except AuthException:
+        log.error('Login for %d:%d failed - wrong credentials?' % (account.username, account.password))
+        return None
+    
+    else:
+        time.sleep(1); response = api.get_inventory()
+        
+        if response:
+            if 'status_code' in response:
+                if response['status_code'] == 1 or response['status_code'] == 2: return api
+                
+                elif response['status_code'] == 3:
+                    # try to accept ToS
+                    time.sleep(5); response = api.mark_tutorial_complete(tutorials_completed = 0,\
+                                    send_marketing_emails = False, send_push_notifications = False)                    
 
+                    if response['status_code'] == 1 or response['status_code'] == 2:
+                        print('Accepted TOS for %s' % account.username)
+                        return api
+                    
+                    elif response['status_code'] == 3:
+                        print('Account %s BANNED!' % account.username)
+                        raise AccountBannedException; return None
+                
+    return None
 
 def get_response(api, cell_ids, lat, lng, alt=0):
     
@@ -50,7 +74,7 @@ def get_response(api, cell_ids, lat, lng, alt=0):
                         return response_dict
                     if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 3:
                         log.critical("Account banned!")
-                        raise Status3Exception
+                        raise AccountBannedException
 
         time.sleep(delay)
         delay += 5
@@ -66,10 +90,10 @@ def get_encryption_lib_path():
     elif sys.platform == "darwin":
         lib_name = "libencrypt-osx-64.so"
 
-    elif os.uname()[4].startswith("arm") and platform.architecture()[0] == '32bit':
+    elif os.uname()[4].startswith("arm") and platform.architecture()[0] == '32bit':  # @UndefinedVariable
         lib_name = "libencrypt-linux-arm-32.so"
 
-    elif os.uname()[4].startswith("aarch64") and platform.architecture()[0] == '64bit':
+    elif os.uname()[4].startswith("aarch64") and platform.architecture()[0] == '64bit':  # @UndefinedVariable
         lib_name = "libencrypt-linux-arm-64.so"
 
     elif sys.platform.startswith('linux'):
