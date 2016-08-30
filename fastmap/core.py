@@ -34,6 +34,7 @@ class Mastermind(Thread):
     def run(self):
         pass
 
+
 class Minion(Thread):
     
     # generic constructor
@@ -60,12 +61,12 @@ class Minion(Thread):
         
         self.postinit()
     
-    
     # generic start, run and stop handling
+    
     def run(self):
         
         # run this once
-        self.firstrun()
+        self.runfirst()
         
         while self.runs:
             
@@ -76,14 +77,15 @@ class Minion(Thread):
             self.work = self.input.get()
             
             # sanity check
-            if self.work == None:
+            if self.work is None:
                 continue
 
             if type(self.work) is PoisonPill:            
-                # broadcast to other threads
+                # propagate to other threads
                 if hasattr(self.work, 'relay'):
                     if self.work.relay is True:
                         self.input.put(self.work)
+                self.output.put(PoisonPill(broadcast=True))
                 # then stop self
                 self.runs = False
                 self.cleanup()
@@ -92,10 +94,13 @@ class Minion(Thread):
             
             # put back last work on error
             try: self.main()
+            except KeyboardInterrupt: raise KeyboardInterrupt 
             except Exception as e:
                 self.input.put(self.work)
                 self.log.error(e)
-        
+                raise e
+                break
+            
         self.cleanup()
         
         return
@@ -108,14 +113,18 @@ class Minion(Thread):
     def postinit(self):
         pass
 
-    def firstrun(self):
+    def runfirst(self):
         pass
     
     def wait(self):
         pass
 
     def main(self):
+        self.mainsub()
+    
+    def mainsub(self):
         pass
     
     def cleanup(self):
         pass
+    

@@ -75,10 +75,10 @@ def get_encryption_lib_path():
     elif sys.platform == "darwin":
         lib_name = "libencrypt-osx-64.so"
 
-    elif os.uname()[4].startswith("arm") and platform.architecture()[0] == '32bit':
+    elif os.uname()[4].startswith("arm") and platform.architecture()[0] == '32bit':  # @UndefinedVariable
         lib_name = "libencrypt-linux-arm-32.so"
 
-    elif os.uname()[4].startswith("aarch64") and platform.architecture()[0] == '64bit':
+    elif os.uname()[4].startswith("aarch64") and platform.architecture()[0] == '64bit':  # @UndefinedVariable
         lib_name = "libencrypt-linux-arm-64.so"
 
     elif sys.platform.startswith('linux'):

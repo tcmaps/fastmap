@@ -1,11 +1,13 @@
 import time, logging, sqlite3
 
-from s2sphere import CellId, LatLng
 from time import sleep
+from s2sphere import CellId, LatLng
+from sqlite3 import IntegrityError, ProgrammingError, DataError
+from sqlite3 import OperationalError, InterfaceError, DatabaseError
 
-from fm.core import Work, Minion
-from fm.apiwrap import api_init, get_response, Status3Exception
-from fm.utils import set_bit, get_cell_ids, sub_cells_normalized
+from fastmap.core import Work, Minion, PoisonPill
+from fastmap.apiwrap import api_init, get_response, Status3Exception
+from fastmap.utils import set_bit, get_cell_ids, sub_cells_normalized
 from pgoapi.exceptions import AuthException, NotLoggedInException
 
 log = logging.getLogger(__name__)
@@ -15,11 +17,8 @@ class MapRequest(Minion):
     
     def preinit(self):
         self.name = '[Req]'
-        
-        
-       
     
-    def firstrun(self):
+    def runfirst(self):
         
         self.api = api_init(self.parameters)
         if self.api == None:   
@@ -115,39 +114,49 @@ class MapParse(Minion):
     
         self.output.put(Work(work.index,querys)) 
 
-
-
+        
 class DataBase(Minion):
     
     def preinit(self):
-        self.name = '[DB)'
+        self.name = '[DB]'
         
     def postinit(self):
         self.lock = self.locks[0]
     
-    def firstrun(self):
+    def runfirst(self):
         self.db = sqlite3.connect(self.config.dbfile)
-    
+
     def main(self):
         
         log = self.log
         work = self.work
+        
+        dbc = self.db.cursor()
+        
+        # 100% empty cell?
+        if len(work.work) == 0:
+            work.work = ["UPDATE _queue SET scan_status=2 WHERE cell_id='%s'" % work.index]
+            log.warning(self.name + ' Cell %s returned empty!' % work.index)
             
-        if len(work.work) > 0:
-            dbc = self.db.cursor()
-
-            try:
-                self.lock.acquire()     
-                for query in work.work:
-                    dbc.execute(query)
-                self.db.commit()
-            except Exception as e:
-                log.error(e)
-                self.output.put(Work(work.index,False))
-                log.error(self.name + ' Upsert for Cell %s failed..' % work.index)
-                return
-            else:
-                self.output.put(Work(work.index,True))                    
-                log.debug(self.name + ' inserted %d Querys.' % len(work.work))
-            finally: self.lock.release()
-
+        try:
+            self.lock.acquire()     
+            for query in work.work:
+                dbc.execute(query)
+            dbc.execute("UPDATE _queue SET scan_status=1 WHERE cell_id='%s'" % work.index)
+            self.db.commit()
+        
+        except (IntegrityError, ProgrammingError, DataError): 
+            self.db.rollback()
+            dbc.execute("UPDATE _queue SET scan_status=3 WHERE cell_id='%s'" % work.index)
+            self.output.put(Work(work.index,False)); sleep(1)
+            log.error(self.name + ' Upsert for Cell %s failed!' % work.index)
+        
+        except (OperationalError, InterfaceError, DatabaseError):
+            self.output.put(PoisonPill())
+            return # Shut down DB
+        
+        else:
+            self.output.put(Work(work.index,True))                    
+            log.debug(self.name + ' inserted %d Querys.' % len(work.work))
+            
+        finally: self.lock.release()

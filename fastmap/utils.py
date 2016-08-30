@@ -8,7 +8,7 @@ from geopy.geocoders import GoogleV3
 from geographiclib.geodesic import Geodesic
 from s2sphere import CellId, Angle, LatLng, LatLngRect, Cap, RegionCoverer
 
-from fm.apiwrap import PoGoAccount
+from fastmap.apiwrap import PoGoAccount
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def cover_circle(lat, lng, radius, level=15):
 
 def cover_square(lat, lng, width, level=15):
     offset = int(width / 2)
-    g = Geodesic.WGS84
+    g = Geodesic.WGS84  # @UndefinedVariable
     r = RegionCoverer()
     r.min_level, r.min_level = level, level
     g1 = g.Direct(lat, lng, 360, offset)

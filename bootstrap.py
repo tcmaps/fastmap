@@ -1,12 +1,11 @@
 #!/usr/bin/env python
-VERSION = '2.1'
 
 """
 based on: pgoapi - Pokemon Go API
 Copyright (c) 2016 tjado <https://github.com/tejado>
 
 Author: TC    <reddit.com/u/Tr4sHCr4fT>
-Version: 1.5
+Version: 2.0
 """
 
 import os, json, sqlite3, argparse, logging
@@ -14,10 +13,10 @@ from time import sleep
 from Queue import Queue
 from threading import RLock
 
-from fm.core import Work, Mastermind, PoisonPill
-from fm.db import check_db, fill_db
-from fm.worker import MapRequest, MapParse, DataBase 
-from fm.utils import get_accounts, cover_circle, cover_square, PoGoAccount
+from fastmap.core import Work, Mastermind, PoisonPill
+from fastmap.db import check_db, fill_db
+from fastmap.worker import MapRequest, MapParse, DataBase 
+from fastmap.utils import get_accounts, cover_circle, cover_square, PoGoAccount
 
 log = logging.getLogger(__name__)
 
@@ -44,11 +43,12 @@ def init_config():
     parser.add_argument("--accounts", help="dont put anything here", default=None)
     parser.add_argument("--level", help="cell level used for tiling", default=12, type=int)
     parser.add_argument("--limit", help="maximum cells to scan", default=(0-1), type=int)
-    #parser.add_argument("--quelen", help="maximum cells in RAM", default=(1000), type=int)
+    parser.add_argument("--quelen", help="maximum cells in RAM", default=(100), type=int)
+    parser.add_argument("--trsh", help="error threshold", default=(10), type=int)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-m", "--minions", help="thread / worker count", default=10, type=int)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)
-    parser.add_argument("--logfile", help="failed scans log", default='failed.txt')
+    parser.add_argument("--logfile", help="failed scans log", default='bootstrap.log')
     config = parser.parse_args()
 
     for key in config.__dict__:
@@ -69,13 +69,11 @@ def init_config():
         logging.getLogger("pgoapi").setLevel(logging.WARNING)
         logging.getLogger("rpc_api").setLevel(logging.WARNING)
    
-    dbversion = check_db(config.dbfile)     
-    if dbversion != VERSION:
-        log.error('Database version mismatch! Expected {}, got {}...'.format(VERSION,dbversion))
-        return
+    if not check_db(config.dbfile):     
+        return None
     
     if config.location:
-        from fm.utils import get_pos_by_name
+        from fastmap.utils import get_pos_by_name
         lat, lng, alt = get_pos_by_name(config.location); del alt
         if config.radius:
             cells = cover_circle(lat, lng, config.radius, config.level)
@@ -93,14 +91,14 @@ def main():
     
     global qqtot 
     global killswitch
-    killswitch = 0
+    killswitch = False
     
     config = init_config()
     if not config:
         log.error('Configuration Error!'); return
         
     with sqlite3.connect(config.dbfile) as db:
-        qqtot = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
+        qqtot = db.cursor().execute("SELECT COUNT(*) FROM _queue WHERE scan_status=0").fetchone()[0]
     
     # some sanity checks   
     if qqtot == 0: log.info('Nothing to scan!'); return
@@ -116,16 +114,23 @@ def main():
 
     if qqtot < config.minions: config.minions = qqtot
     
+    n = (qqtot / config.minions)
+    log.info('Total %d cells, %d Workers, %d cells each.' % (qqtot, config.minions, n))
+    ttot = (n * config.delay + 1); m, s = divmod(ttot, 60); h, m = divmod(m, 60)
+    log.info('ETA %d:%02d:%02d' % (h, m, s)); del n,h,m,s
+    
     # last chance to break
-    sleep(1)
-    sleep(1)
-    sleep(1)
-
+    for i in xrange(3):
+        log.info('Start in %d...' % (3-i)); sleep(1)
+    
     # the fun begins
     Overseer = BootStrap(0, config)
-    #Mastermind.setDaemon()
+    BootStrap.setDaemon(Overseer, daemonic=True)
     Overseer.start()
-    Overseer.join()
+    
+    try: Overseer.join(ttot+100)
+    except KeyboardInterrupt: killswitch = None
+    finally: Overseer.join(60)
 
     log.info('Dekimashita!')
 
@@ -135,8 +140,7 @@ class BootStrap(Mastermind):
     
     def run(self):
         
-        global killswitch
-        killme, killswitch = False, False
+        killswitch, dontkillme = False, True
         
         Minions = []
         accounts = self.config.accounts
@@ -145,29 +149,28 @@ class BootStrap(Mastermind):
       = Queue(), Queue(), Queue(), Queue()
         
         dblock = RLock()
-        logf = open(self.config.logfile,'a')
-        log.info('DB loaded...')
-        
-        log.debug('Filling Queue...')
-        with sqlite3.connect(self.config.dbfile) as db:
-            cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' ORDER BY cell_id"
-            " LIMIT %d" % qqtot).fetchall()]
-        for cell in cells:
-                RPCq.put(Work(cell,cell)) 
 
-        n = (qqtot / self.config.minions)
-        log.info('Total %d cells, %d Workers, %d cells each.' % (qqtot, self.config.minions, n))
-        tt = (n * self.config.delay + 1); m, s = divmod(tt, 60); h, m = divmod(m, 60)
-        log.info('ETA %d:%02d:%02d' % (h, m, s)); del n,h,m,s,tt
+        logf = logging.getLogger('file'); logf.addHandler(logging.FileHandler(self.config.logfile)\
+                                        .setFormatter(logging.Formatter('%(asctime)s - %(message)s')))
+        log.info('Loading DB...'); logging.getLogger('file').setLevel(logging.ERROR)
         
-        log.debug('Initializing threads...')
-        for m in range(self.config.minions):
+        with sqlite3.connect(self.config.dbfile) as db:
+            cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' WHERE scan_status=0 "
+                    "ORDER BY cell_id LIMIT %d" % (self.config.quelen*self.config.minions)).fetchall()]
+        qqtfill = len(cells)
+        log.debug('Filling Queue... (%d cells)' % (qqtfill))
+        if len(cells) > 0:
+            for cell in cells:
+                RPCq.put(Work(cell,cell))
+        
+        log.info('Initializing threads...')
+        for m in xrange(self.config.minions):
             Minions.append(MapRequest(m+1, self.config, RPCq, MapQ, accounts[m]))
 
         MapT = MapParse(0, self.config, MapQ, SQLq)
         DBt = DataBase(0, self.config, SQLq, doneQ, locks=[dblock])
 
-        log.debug('Starting threads...')    
+        log.info('Starting threads...')    
         for Minion in Minions:
             Minion.start()
             sleep(5)
@@ -175,63 +178,72 @@ class BootStrap(Mastermind):
         MapT.start()
         DBt.start()
         
-        with sqlite3.connect(self.config.dbfile) as db:
+        self.ok, self.fail = 0,0
 
-            while not killme:
-
+        while dontkillme:
+            try: 
                 while not doneQ.empty():
                     work = doneQ.get()
                     
-                    if work.work is True:
-                        try:
-                            dblock.acquire()
-                            db.cursor().execute("DELETE FROM _queue WHERE cell_id='%s'" % work.index)
-                            db.commit() 
-                            log.debug('Cell %s marked as done.' % work.index); self.pos += 1
-                            log.info('Completed %d of %d Cells.' % (self.pos,qqtot))
-                        except Exception as e:
-                            doneQ.put(work)
-                            log.error(e)
-                            log.debug('Removing Cell %s from Queue failed...' % work.index)
-                        
-                        finally: dblock.release()
+                    if type(work) is PoisonPill:
+                        if killswitch is False: killswitch = None
+                        continue
                     
+                    if work.work is True:
+    
+                        log.debug('Cell %s marked as done.' % work.index); self.ok += 1
+                        log.info('Completed %d of %d Cells.' % (self.pos,qqtot))
+    
                     elif work.work is False:
-                        logf.write('%s\n' % work.index); self.pos += 1 
+                        logf.error('%s\n' % work.index); self.fail += 1 
                         log.debug('Cell %s marked as failed.' % work.index)
                         
-                    else: log.debug('Cell %s ignored.' % work.index)
+                    else: log.debug('Cell %s ignored.' % work.index); self.pos += 1
+                
+                self.pos = (self.ok + self.fail)
+                log.debug('%d Cells scanned... %d ok, %d failed, %d lost' % (self.pos, self.ok, self.fail,\
+                                                                                self.pos - self.ok - self.fail))
+                # Hold work only partially in RAM
+                if not killswitch and RPCq.empty() and qqtfill < qqtot:
+                    
+                    MapQ.join(); SQLq.join()
+                    
+                    cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' WHERE scan_status=0 "
+                    "ORDER BY cell_id LIMIT %d" % (self.config.quelen*self.config.minions)).fetchall()]
+                    if len(cells) > 0:
+                        for cell in cells: RPCq.put(Work(cell,cell))
+                    qqrfill = len(cells); qqtfill += qqrfill
+                    log.debug('Refilled Queue. (%d cells)' % qqrfill)
+                
+                if not killswitch and self.fail > self.config.trsh:
+                    killswitch = None
+                    log.error('Errors! Shutting down...')
                 
                 if not killswitch and self.pos >= qqtot:
-                    killswitch = True
-                    log.info('Stopping threads...')
+                    killswitch = None
+                    log.info('Work done. Stopping threads...')
                                 
-                if killswitch and RPCq.empty():
+                if killswitch is None:
                     RPCq.put(PoisonPill(broadcast=True))
-                    
-                if killswitch and MapQ.empty():
                     MapQ.put(PoisonPill(broadcast=True))
-                    
-                if killswitch and SQLq.empty():
                     SQLq.put(PoisonPill())
+                    killswitch = True
                 
-                if killswitch and doneQ.empty():
-                    killme = True
+                if killswitch and doneQ.empty(): dontkillme = False
                 
                     
                 sleep(1); log.debug('Ping.') # I'm still alive
-                
+            
+            except (KeyboardInterrupt): killswitch = None; raise KeyboardInterrupt
+        
 
-            log.info('Cleaning up...')
-            logf.flush()
+        log.info('Waiting for threads to exit or Timeout (90s)')
         
         for Minion in Minions:
-            Minion.join()
+            Minion.join(15)
             
-        MapT.join()
-        DBt.join()
+        MapT.join(30)
+        DBt.join(45)
         
-        logf.close()
-
 if __name__ == '__main__':
     main()
