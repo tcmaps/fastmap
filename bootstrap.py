@@ -11,9 +11,10 @@ Version: 1.5
 
 import os, sys, json
 import argparse, logging
-from time import sleep
 import sqlite3
 
+from time import sleep
+from pkgutil import find_loader
 from s2sphere.sphere import CellId, LatLng
 from sqlite3 import IntegrityError, ProgrammingError, DataError
 from sqlite3 import OperationalError, InterfaceError, DatabaseError
@@ -30,8 +31,6 @@ def init_config():
     parser = argparse.ArgumentParser()     
     logging.basicConfig(level=logging.INFO,\
                         format='[%(levelname)5s] %(asctime)s %(message)s', datefmt="%d.%m.%y %H:%M:%S")
-    if os.path.isfile('DEBUG'): logging.getLogger(__name__).setLevel(logging.DEBUG)
-
     load   = {}
     config_file = "config.json"
     if os.path.isfile(config_file):
@@ -48,8 +47,10 @@ def init_config():
     parser.add_argument("--accfile", help="ptc account list", default='accounts.txt')
     parser.add_argument("--level", help="cell level used for tiling", default=12, type=int)
     parser.add_argument("--maxq", help="maximum queue per worker", default=500, type=int)
+    parser.add_argument("--pbar", help="tqdm progressbar", action='store_true', default=1)
     parser.add_argument("-t", "--delay", help="rpc request interval", default=10, type=int)
     parser.add_argument("-m", "--minions", help="thread / worker count", default=10, type=int)
+    parser.add_argument("-v", "--verbose", help="Verbose Mode", action='store_true', default=0)    
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true', default=0)    
     config = parser.parse_args()
 
@@ -88,6 +89,13 @@ def init_config():
     
     if config.minions < 1: config.minions = 1
     
+    if config.pbar:
+        config.pbar = find_loader('tqdm')
+        if config.pbar is not None: config.pbar = True
+        else: log.warning("'pip install tqdm' to see a fancy progress bar!")
+    
+    if os.path.isfile('DEBUG'): logging.getLogger(__name__).setLevel(logging.DEBUG)
+    
     return config
 
 def main():
@@ -96,6 +104,7 @@ def main():
     if not config:
         log.error('Configuration Error!'); return
     
+    bar = dummybar()
     minions = config.minions
     db = sqlite3.connect(config.dbfile)
     log.info('DB loaded.')
@@ -115,7 +124,7 @@ def main():
     workpart = ( totalwork / minions )
     if workpart > config.maxq : workpart = config.maxq
     
-# all OK?   
+# all OK?
     done = 0
     try:
 # initialize APIs
@@ -140,7 +149,14 @@ def main():
         for i in xrange(3):
             log.info('Start in %d...' % (3-i)); sleep(1)
         log.info("Let's go!")
-    
+
+# init bar
+        if config.pbar:
+            import tqdm
+            from fastmap.pbar import TqdmLogHandler
+            bar = tqdm.tqdm(total=totalwork); log.addHandler(TqdmLogHandler())
+            logging.getLogger(__name__).setLevel(logging.WARN)
+
 # open DB
         with sqlite3.connect(config.dbfile) as db:  
             totalstats = [0, 0, 0, 0]  
@@ -163,7 +179,7 @@ def main():
                 delay = float( float(config.delay) / float(len(workers)) )
                 for i in xrange(len(cells)):
                     
-                    sleep(delay)     
+                    sleep(delay)    
                     
                     cell = CellId.from_token(cells[i])
                     lat = CellId.to_lat_lng(cell).lat().degrees 
@@ -184,8 +200,7 @@ def main():
                         response_dict = get_response(workers[i], cell_ids, lat, lng)
                     except: log.error(sys.exc_info()[0]); sleep(config.delay) 
                     finally:
-                        responses.append(response_dict)
-                        
+                        responses.append(response_dict); bar.update()                        
 # end RP loop
 
 # parse loop    
@@ -240,8 +255,8 @@ def main():
                     querys.append("DELETE FROM _queue WHERE cell_id='{}'".format(cells[i]))
                     log.debug('Removing %s from Queue' % cells[i])
                     done += 1
-# end parse loop            
-
+# end parse loop                    
+                    
 # save to DB   #f = open('dump.sql','a')
                 try:
                     dbc = db.cursor()
@@ -256,17 +271,22 @@ def main():
                 else: db.commit(); log.debug('Inserted %d queries' % len(querys))
                  
 # feedback                
-                log.info('Queue: %5d done, %5d left' % (done,totalwork-done)) ;sleep(1) #;f.close(); 
-        
+                log.info('Queue: %5d done, %5d left' % (done,totalwork-done)); sleep(1)
+
 ## end main loop        
         
-            log.info('Total: %5d Cells, %5d Gyms, %5d Pokestops, %5d Spawns.' % (totalstats[0],totalstats[1],totalstats[2],totalstats[3]))
+            log.info('Total: %5d Cells, %5d Gyms, %5d Pokestops, %5d Spawns.' % tuple(totalstats)) 
 
 ##
     except KeyboardInterrupt: log.info('Aborted!')
-    else: log.info("Dekimashita!")
-    finally: db.close()
+    else: print("Dekimashita!")
+    finally: db.close(); bar.close()
 
+
+class dummybar(object):
+    def __init__(self): pass
+    def close(self): pass
+    def update(self, dummy): pass
 
 if __name__ == '__main__':
     main()
