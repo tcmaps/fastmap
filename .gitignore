@@ -154,4 +154,3 @@ local.properties
 *.orig
 /magiclib/
 /pgoapi/
-/accounts.txt
