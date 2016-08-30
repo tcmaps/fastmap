@@ -3,7 +3,7 @@ fastmap
 
 The *fast* PoGo map.   
   
-![Alt Text]https://github.com/Tr4sHCr4fT/fastmap/blob/master/fastmap.gif
+![Alt Text](https://github.com/Tr4sHCr4fT/fastmap/blob/master/fastmap.gif)
   
 ##Featurette & ToDo:   
 
