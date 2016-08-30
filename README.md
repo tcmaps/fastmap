@@ -19,7 +19,7 @@ The *fast* PoGo map.
 
     bootstrap.py [-h] [-a AUTH_SERVICE] [-u USERNAME] [-p PASSWORD]
                       [-l LOCATION] [-r RADIUS] [-w WIDTH] [-f DBFILE]
-                      [-m --minions THREADS] [--level LEVEL] [-t DELAY] [-d] [-n]
+                      [-m --minions THREADS] [--level LEVEL] [-t DELAY] [-d]
 
 #### Examples
 
