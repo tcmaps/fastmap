@@ -15,6 +15,12 @@ log = logging.getLogger(__name__)
 class Status3Exception(Exception):
     pass
 
+class PoGoAccount():
+    def __init__(self, auth, login, passw):
+        self.auth_service = auth
+        self.username = login
+        self.password = passw
+
 def api_init(account):
     api = PGoApi()
 
@@ -33,14 +39,14 @@ def api_init(account):
                 log.error('Account banned!'); return None
             else: return None
 
-
 def get_response(api, cell_ids, lat, lng, alt=0):
     
     timestamps = [0,] * len(cell_ids)
     response_dict = []
     delay = 11
+    trys = 3
     
-    while True:
+    while trys:
         api.set_position(lat, lng, alt)
         response_dict = api.get_map_objects(latitude=lat, longitude=lng, since_timestamp_ms = timestamps, cell_id = cell_ids)
         if response_dict:
@@ -54,6 +60,9 @@ def get_response(api, cell_ids, lat, lng, alt=0):
 
         time.sleep(delay)
         delay += 5
+        trys -= 1
+    
+    return None
 
 def get_encryption_lib_path():
     # win32 doesn't mean necessarily 32 bits
@@ -66,10 +75,10 @@ def get_encryption_lib_path():
     elif sys.platform == "darwin":
         lib_name = "libencrypt-osx-64.so"
 
-    elif os.uname()[4].startswith("arm") and platform.architecture()[0] == '32bit':
+    elif os.uname()[4].startswith("arm") and platform.architecture()[0] == '32bit':  # @UndefinedVariable
         lib_name = "libencrypt-linux-arm-32.so"
 
-    elif os.uname()[4].startswith("aarch64") and platform.architecture()[0] == '64bit':
+    elif os.uname()[4].startswith("aarch64") and platform.architecture()[0] == '64bit':  # @UndefinedVariable
         lib_name = "libencrypt-linux-arm-64.so"
 
     elif sys.platform.startswith('linux'):

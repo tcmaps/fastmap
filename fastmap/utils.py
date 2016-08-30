@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import re
 import math
 import logging
 
@@ -7,24 +8,32 @@ from geopy.geocoders import GoogleV3
 from geographiclib.geodesic import Geodesic
 from s2sphere import CellId, Angle, LatLng, LatLngRect, Cap, RegionCoverer
 
+from fastmap.apiwrap import PoGoAccount
+
 log = logging.getLogger(__name__)
 
 
-class PoGoAccount():
-    def __init__(self, auth, login, passw):
-        self.auth_service = auth
-        self.username = login
-        self.password = passw
 
 def set_bit(value, bit):
     return value | (1<<bit)
 
 def get_pos_by_name(location_name):
-    geolocator = GoogleV3()
-    loc = geolocator.geocode(location_name)
-    if not loc:
-        return None
-    return (loc.latitude, loc.longitude, loc.altitude)
+    prog = re.compile("^(\-?\d+\.\d+)?,\s*(\-?\d+\.\d+?)$")
+    res = prog.match(location_name)
+    latitude, longitude, altitude = None, None, None
+    if res:
+        latitude, longitude, altitude = float(res.group(1)), float(res.group(2)), 0
+    else:
+        geolocator = GoogleV3()
+        loc = geolocator.geocode(location_name, timeout=10)
+        if loc:
+            log.info("Location for '%s' found: %s", location_name, loc.address)
+            log.info('Coordinates (lat/long/alt) for location: %s %s %s', loc.latitude, loc.longitude, loc.altitude)
+            latitude, longitude, altitude = loc.latitude, loc.longitude, loc.altitude
+        else:
+            return None
+
+    return (latitude, longitude, altitude)
 
 def get_accounts(filename):
     accs = []
@@ -48,8 +57,10 @@ def susub_cells(cell):
     return sorted(cells)
 
 def sub_cells_normalized(cell, level=15):
+    if cell.level() == level:
+        return [cell]
+    
     cells = [cell]
-
     for dummy in range(level-cell.level()):
         loopcells = cells; cells = []
         for loopcell in loopcells:
@@ -75,7 +86,7 @@ def cover_circle(lat, lng, radius, level=15):
 
 def cover_square(lat, lng, width, level=15):
     offset = int(width / 2)
-    g = Geodesic.WGS84
+    g = Geodesic.WGS84  # @UndefinedVariable
     r = RegionCoverer()
     r.min_level, r.min_level = level, level
     g1 = g.Direct(lat, lng, 360, offset)
