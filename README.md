@@ -1,9 +1,11 @@
 fastmap
 =======
 
-The *fast* PoGo map.
-
-##Featurette & ToDo:
+The *fast* PoGo map.   
+  
+![Alt Text]https://github.com/Tr4sHCr4fT/fastmap/blob/master/fastmap.gif
+  
+##Featurette & ToDo:   
 
 - [x] *fast* bootstrap data generator
 - [x] standardized database structure  
