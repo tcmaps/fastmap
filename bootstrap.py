@@ -89,11 +89,6 @@ def init_config():
     
     if config.minions < 1: config.minions = 1
     
-    if config.pbar:
-        config.pbar = find_loader('tqdm')
-        if config.pbar is not None: config.pbar = True
-        else: log.warning("'pip install tqdm' to see a fancy progress bar!")
-    
     if os.path.isfile('DEBUG'): logging.getLogger(__name__).setLevel(logging.DEBUG)
     
     return config
@@ -103,6 +98,11 @@ def main():
     config = init_config()
     if not config:
         log.error('Configuration Error!'); return
+    
+    if config.pbar:
+        bar = find_loader('tqdm')
+        if bar is not None: from fastmap.pbar import TqdmLogHandler
+        else: log.warning("'pip install tqdm' to see a fancy progress bar!"); config.pbar = False
     
     bar = dummybar()
     minions = config.minions
@@ -130,7 +130,7 @@ def main():
 # initialize APIs
         workers = []
         for m in xrange(minions):
-            log.info('Initializing worker %2d of %2d' % (m,minions))
+            log.info('Initializing worker %2d of %2d' % (m+1,minions))
             api = api_init(accounts[m]); sleep(3)
             if api is not None:
                 workers.append(api)
@@ -151,11 +151,7 @@ def main():
         log.info("Let's go!")
 
 # init bar
-        if config.pbar:
-            import tqdm
-            from fastmap.pbar import TqdmLogHandler
-            bar = tqdm.tqdm(total=totalwork); log.addHandler(TqdmLogHandler())
-            logging.getLogger(__name__).setLevel(logging.WARN)
+        if config.pbar: import tqdm; log.addHandler(TqdmLogHandler()); bar = tqdm.tqdm(total=totalwork)
 
 # open DB
         with sqlite3.connect(config.dbfile) as db:  
@@ -271,11 +267,11 @@ def main():
                 else: db.commit(); log.debug('Inserted %d queries' % len(querys))
                  
 # feedback                
-                log.info('Queue: %5d done, %5d left' % (done,totalwork-done)); sleep(1)
+                if not config.pbar: log.info('Queue: %5d done, %5d left' % (done,totalwork-done))
 
 ## end main loop        
         
-            log.info('Total: %5d Cells, %5d Gyms, %5d Pokestops, %5d Spawns.' % tuple(totalstats)) 
+            log.info('Total: %d Cells, %d Gyms, %d Pokestops, %d Spawns.' % tuple(totalstats)) 
 
 ##
     except KeyboardInterrupt: log.info('Aborted!')
@@ -286,7 +282,7 @@ def main():
 class dummybar(object):
     def __init__(self): pass
     def close(self): pass
-    def update(self, dummy): pass
+    def update(self, dummy=0): pass
 
 if __name__ == '__main__':
     main()
