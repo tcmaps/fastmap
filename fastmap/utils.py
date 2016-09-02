@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import re
 import math
 import logging
 
@@ -9,18 +10,30 @@ from s2sphere import CellId, Angle, LatLng, LatLngRect, Cap, RegionCoverer
 
 from fastmap.apiwrap import PoGoAccount
 
-
 log = logging.getLogger(__name__)
+
+
 
 def set_bit(value, bit):
     return value | (1<<bit)
 
 def get_pos_by_name(location_name):
-    geolocator = GoogleV3()
-    loc = geolocator.geocode(location_name)
-    if not loc:
-        return None
-    return (loc.latitude, loc.longitude, loc.altitude)
+    prog = re.compile("^(\-?\d+\.\d+)?,\s*(\-?\d+\.\d+?)$")
+    res = prog.match(location_name)
+    latitude, longitude, altitude = None, None, None
+    if res:
+        latitude, longitude, altitude = float(res.group(1)), float(res.group(2)), 0
+    else:
+        geolocator = GoogleV3()
+        loc = geolocator.geocode(location_name, timeout=10)
+        if loc:
+            log.info("Location for '%s' found: %s", location_name, loc.address)
+            log.info('Coordinates (lat/long/alt) for location: %s %s %s', loc.latitude, loc.longitude, loc.altitude)
+            latitude, longitude, altitude = loc.latitude, loc.longitude, loc.altitude
+        else:
+            return None
+
+    return (latitude, longitude, altitude)
 
 def get_accounts(filename):
     accs = []
@@ -44,8 +57,10 @@ def susub_cells(cell):
     return sorted(cells)
 
 def sub_cells_normalized(cell, level=15):
+    if cell.level() == level:
+        return [cell]
+    
     cells = [cell]
-
     for dummy in range(level-cell.level()):
         loopcells = cells; cells = []
         for loopcell in loopcells:
@@ -54,6 +69,28 @@ def sub_cells_normalized(cell, level=15):
 
     return sorted(cells)
 
+def sub_cell(cell,i=0,dist=25):
+    
+    g = Geodesic.WGS84  # @UndefinedVariable
+    olat = CellId.to_lat_lng(cell).lat().degrees
+    olng = CellId.to_lat_lng(cell).lng().degrees
+
+    p = g.Direct(olat, olng,(45+(90*i)),dist)
+    c = CellId.from_lat_lng(LatLng.from_degrees(p['lat2'],p['lon2']))
+    
+    return c.parent(cell.level()+1)
+
+def get_cell_edges(cell, level=30):
+    
+    edge_cells = [cell]
+    for i in xrange(4):
+        subcell = cell
+        for dummy in xrange(level-cell.level()):
+            subcell = sub_cell(subcell,i,1)
+        edge_cells.append(subcell)
+    
+    return edge_cells
+    
 def get_cell_ids(cells):
     cell_ids = sorted([x.id() for x in cells])
     return cell_ids
@@ -94,6 +131,20 @@ def get_cell_walk(lat, lng, radius, level=15):
         right = right.next()
         left = left.prev()
     return sorted(walk)
+
+def cell_spiral(lat, lng, dist, level=15, step=100, res=3.6):
+    cells = []
+
+    g = Geodesic.WGS84  # @UndefinedVariable
+    
+    for i in xrange(0,dist,step):
+        for rad in xrange(int(360/res)):
+            p = g.Direct(lat, lng, rad*res, i)
+            c = CellId.from_lat_lng(LatLng.from_degrees(p['lat2'],p['lon2']))
+            c = c.parent(level)
+            if c not in cells: cells.append(c)
+    
+    return cells
 
 class cell_neighbor:
     def __init__(self, cell):

@@ -71,10 +71,7 @@ def init_config():
         logging.getLogger("pgoapi").setLevel(logging.WARNING)
         logging.getLogger("rpc_api").setLevel(logging.WARNING)
    
-    dbversion = check_db(config.dbfile)     
-    if dbversion != VERSION:
-        log.error('Database version mismatch! Expected {}, got {}...'.format(VERSION,dbversion))
-        return
+    if not check_db(config.dbfile): return     
     
     if config.location:
         from fastmap.utils import get_pos_by_name
@@ -105,10 +102,11 @@ def main():
         else: log.warning("'pip install tqdm' to see a fancy progress bar!"); config.pbar = False
     
     bar = dummybar()
+    minibar = dummybar()
     minions = config.minions
     db = sqlite3.connect(config.dbfile)
     log.info('DB loaded.')
-    totalwork  = db.cursor().execute("SELECT COUNT(*) FROM _queue").fetchone()[0]
+    totalwork  = db.cursor().execute("SELECT COUNT(*) FROM _queue WHERE scan_status=0").fetchone()[0]
     
     # some sanity checks   
     if totalwork == 0: log.info('Nothing to scan!'); return
@@ -125,7 +123,7 @@ def main():
     if workpart > config.maxq : workpart = config.maxq
     
 # all OK?
-    done = 0
+    done, donetotal = 0, 0
     try:
 # initialize APIs
         workers = []
@@ -146,36 +144,40 @@ def main():
         log.info('ETA %d:%02d:%02d' % (h, m, s)); del h,m,s, ttot, minions
 
 # last chance to abort
-        for i in xrange(3):
-            log.info('Start in %d...' % (3-i)); sleep(1)
+        log.info('Start in 3...');sleep(1)
+        log.info('Start in 2..');sleep(1)
+        log.info('Start in 1.');sleep(1)
         log.info("Let's go!")
 
 # init bar
-        if config.pbar: import tqdm; log.addHandler(TqdmLogHandler()); bar = tqdm.tqdm(total=totalwork)
+        if config.pbar: import tqdm; log.addHandler(TqdmLogHandler()); bar = tqdm.tqdm(total=totalwork, desc=' total', unit='scan')
 
 # open DB
         with sqlite3.connect(config.dbfile) as db:  
             totalstats = [0, 0, 0, 0]  
 
 ## main loop        
-            while done < totalwork and len(workers) > 0:
+            while donetotal < totalwork and len(workers) > 0:
 ##
- 
+                done = 0
 # kill some zombies
                 for i in xrange(len(workers)):
                     if workers[i] is None:
                         workers[i].pop
 
 # fetch DB        
-                cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' "
+                cells = [x[0] for x in db.cursor().execute("SELECT cell_id FROM '_queue' WHERE scan_status=0 "
                             "ORDER BY cell_id LIMIT %d" % ((len(workers)))).fetchall()]
 
 # RPC loop            
                 responses = []
-                delay = float( float(config.delay) / float(len(workers)) )
+                delay = float( float(config.delay) / float(len(cells)) )
+                if config.pbar: minibar = tqdm.tqdm(total=len(cells), desc='worker', unit='scan')
+                
                 for i in xrange(len(cells)):
                     
-                    sleep(delay)    
+                    sleep(delay)
+                    minibar.update()    
                     
                     cell = CellId.from_token(cells[i])
                     lat = CellId.to_lat_lng(cell).lat().degrees 
@@ -196,7 +198,9 @@ def main():
                         response_dict = get_response(workers[i], cell_ids, lat, lng)
                     except: log.error(sys.exc_info()[0]); sleep(config.delay) 
                     finally:
-                        responses.append(response_dict); bar.update()                        
+                        responses.append(response_dict)
+                
+                minibar.close()
 # end RP loop
 
 # parse loop    
@@ -206,51 +210,57 @@ def main():
                     stats = [0, 0, 0, 0]
                     response_dict = responses[i]
                     
-                    if response_dict is None or len(response_dict) == 0: continue
+                    if response_dict is None or len(response_dict) == 0:
+                        querys.append("UPDATE _queue SET scan_status=3 WHERE cell_id='{}'".format(cells[i])); done += 1 
+                        continue
                     
-                    for map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
-                        cellid = CellId(map_cell['s2_cell_id']).to_token()
-                        stats[0] += 1
-                        content = 0                   
+                    if 'map_cells' in response_dict['responses']['GET_MAP_OBJECTS']:
+                        for map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
+                            cellid = CellId(map_cell['s2_cell_id']).to_token()
+                            stats[0] += 1
+                            content = 0                   
+                            
+                            if 'forts' in map_cell:
+                                for fort in map_cell['forts']:
+                                    if 'gym_points' in fort:
+                                        stats[1]+=1
+                                        content = set_bit(content, 2)
+                                        querys.append("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
+                                        "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
+                                        int(fort['enabled']),0,int(map_cell['current_timestamp_ms']/1000)))
+                                    else:
+                                        stats[2]+=1
+                                        content = set_bit(content, 1)
+                                        querys.append("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
+                                        "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
+                                        int(fort['enabled']),1,int(map_cell['current_timestamp_ms']/1000)))
+                                                                             
+                            if 'spawn_points' in map_cell:
+                                content = set_bit(content, 0)
+                                for spawn in map_cell['spawn_points']:
+                                    stats[3]+=1;
+                                    spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
+                                    querys.append("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
+                                    "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
+                            if 'decimated_spawn_points' in map_cell:
+                                content = set_bit(content, 0)
+                                for spawn in map_cell['decimated_spawn_points']:
+                                    stats[3]+=1;
+                                    spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
+                                    querys.append("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
+                                    "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
+                                    
+                            querys.append("INSERT OR IGNORE INTO cells (cell_id, content, last_scan) "
+                            "VALUES ('{}', {}, {})".format(cellid,content,int(map_cell['current_timestamp_ms']/1000)))
                         
-                        if 'forts' in map_cell:
-                            for fort in map_cell['forts']:
-                                if 'gym_points' in fort:
-                                    stats[1]+=1
-                                    content = set_bit(content, 2)
-                                    querys.append("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
-                                    "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
-                                    int(fort['enabled']),0,int(map_cell['current_timestamp_ms']/1000)))
-                                else:
-                                    stats[2]+=1
-                                    content = set_bit(content, 1)
-                                    querys.append("INSERT OR IGNORE INTO forts (fort_id, cell_id, pos_lat, pos_lng, fort_enabled, fort_type, last_scan) "
-                                    "VALUES ('{}','{}',{},{},{},{},{})".format(fort['id'],cellid,fort['latitude'],fort['longitude'], \
-                                    int(fort['enabled']),1,int(map_cell['current_timestamp_ms']/1000)))
-                                                                         
-                        if 'spawn_points' in map_cell:
-                            content = set_bit(content, 0)
-                            for spawn in map_cell['spawn_points']:
-                                stats[3]+=1;
-                                spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
-                                querys.append("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
-                                "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
-                        if 'decimated_spawn_points' in map_cell:
-                            content = set_bit(content, 0)
-                            for spawn in map_cell['decimated_spawn_points']:
-                                stats[3]+=1;
-                                spwn_id = CellId.from_lat_lng(LatLng.from_degrees(spawn['latitude'],spawn['longitude'])).parent(20).to_token()
-                                querys.append("INSERT OR IGNORE INTO spawns (spawn_id, cell_id, pos_lat, pos_lng, last_scan) "
-                                "VALUES ('{}','{}',{},{},{})".format(spwn_id,cellid,spawn['latitude'],spawn['longitude'],int(map_cell['current_timestamp_ms']/1000)))
-                                
-                        querys.append("INSERT OR IGNORE INTO cells (cell_id, content, last_scan) "
-                        "VALUES ('{}', {}, {})".format(cellid,content,int(map_cell['current_timestamp_ms']/1000)))
+                        log.debug('%s: ' % cells[i] + '%d Cells, %d Gyms, %d Pokestops, %d Spawns.' % tuple(stats))
+                        totalstats[0] += stats[0]; totalstats[1] += stats[1]; totalstats[2] += stats[2]; totalstats[3] += stats[3]
+                        if (stats[1]+stats[2]+stats[3]) > 0: querys.append("UPDATE _queue SET scan_status=1 WHERE cell_id='{}'".format(cells[i]))
+                        else: querys.append("UPDATE _queue SET scan_status=2 WHERE cell_id='{}'".format(cells[i]))
+                        log.debug('Marked %s as Done.' % cells[i])
+                        done += 1
                     
-                    log.debug('%s: ' % cells[i] + '%d Cells, %d Gyms, %d Pokestops, %d Spawns.' % tuple(stats))
-                    totalstats[0] += stats[0]; totalstats[1] += stats[1]; totalstats[2] += stats[2]; totalstats[3] += stats[3]
-                    querys.append("DELETE FROM _queue WHERE cell_id='{}'".format(cells[i]))
-                    log.debug('Removing %s from Queue' % cells[i])
-                    done += 1
+                    else: querys.append("UPDATE _queue SET scan_status=3 WHERE cell_id='{}'".format(cells[i])); done += 1
 # end parse loop                    
                     
 # save to DB   #f = open('dump.sql','a')
@@ -267,16 +277,17 @@ def main():
                 else: db.commit(); log.debug('Inserted %d queries' % len(querys))
                  
 # feedback                
-                if not config.pbar: log.info('Queue: %5d done, %5d left' % (done,totalwork-done))
-
+                bar.update(done); donetotal += done
+                if not config.pbar: log.info('Queue: %5d done, %5d left' % (donetotal,totalwork-donetotal))
 ## end main loop        
-        
+
+            bar.close()
             log.info('Total: %d Cells, %d Gyms, %d Pokestops, %d Spawns.' % tuple(totalstats)) 
 
 ##
     except KeyboardInterrupt: log.info('Aborted!')
     else: print("Dekimashita!")
-    finally: db.close(); bar.close()
+    finally: db.close()
 
 
 class dummybar(object):

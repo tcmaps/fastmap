@@ -22,7 +22,6 @@ class PoGoAccount():
         self.username = login
         self.password = passw
 
-
 def api_init(account):
     api = PGoApi()
     
@@ -33,7 +32,7 @@ def api_init(account):
         api.activate_signature(get_encryption_lib_path()); time.sleep(1); api.get_player()
     
     except AuthException:
-        log.error('Login for %d:%d failed - wrong credentials?' % (account.username, account.password))
+        log.error('Login for %s:%s failed - wrong credentials?' % (account.username, account.password))
         return None
     
     else:
@@ -78,6 +77,18 @@ def get_response(api, cell_ids, lat, lng, alt=0):
 
         time.sleep(delay)
         delay += 5
+        
+def check_reponse(response):
+  
+    if response:
+        if 'responses' in response and 'status_code' in response:
+            if response['status_code'] == 1 or response['status_code'] == 2:
+                return response
+            elif response['status_code'] == 3:
+                raise AccountBannedException; return None
+        else: return None
+    
+    return None
 
 def get_encryption_lib_path():
     # win32 doesn't mean necessarily 32 bits
